@@ -316,6 +316,20 @@ export default function CatalogPreviewPage() {
     );
   }
 
+  function getOptimizedCatalogImageUrl(
+    sourceUrl: string,
+    width: number,
+    quality = 78
+  ) {
+    const params = new URLSearchParams({
+      src: sourceUrl,
+      w: String(width),
+      q: String(quality),
+    });
+
+    return `/api/catalog-image?${params.toString()}`;
+  }
+
   function getPublicCatalogUrl() {
     if (!catalog?.share_token || typeof window === "undefined") return "";
     return `${window.location.origin}/catalogo-cliente/${catalog.share_token}`;
@@ -941,7 +955,16 @@ export default function CatalogPreviewPage() {
         <section className="cover-page print-page">
           <div className="cover-brand">
             <Image
+              className="cover-logo-screen"
               src="/brand/camel-branco.svg"
+              alt="Camel Paper"
+              width={330}
+              height={130}
+              priority
+            />
+            <Image
+              className="cover-logo-print"
+              src="/brand/camel-colorido.svg"
               alt="Camel Paper"
               width={330}
               height={130}
@@ -1074,7 +1097,7 @@ export default function CatalogPreviewPage() {
                 <div className="product-gallery">
                   <div className="product-main-image">
                     {front ? (
-                      <img src={front.image_url} alt={product.name} />
+                      <img src={getOptimizedCatalogImageUrl(front.image_url, 900, 78)} alt={product.name} />
                     ) : (
                       <div className="image-empty">Imagem profissional em preparação</div>
                     )}
@@ -1085,7 +1108,7 @@ export default function CatalogPreviewPage() {
                     <div className="product-thumbnails">
                       {secondaryImages.slice(0, 3).map(({ label, image }) => (
                         <div className="thumbnail-card" key={image.id}>
-                          <img src={image.image_url} alt={`${label} de ${product.name}`} />
+                          <img src={getOptimizedCatalogImageUrl(image.image_url, 280, 74)} alt={`${label} de ${product.name}`} />
                           <span>{label}</span>
                         </div>
                       ))}
@@ -1169,7 +1192,7 @@ export default function CatalogPreviewPage() {
                             <div className="catalog-variant-card" key={variant.id}>
                               <div className="catalog-variant-image">
                                 {variantImage ? (
-                                  <img src={variantImage.image_url} alt={`${product.name} - ${variant.name}`} />
+                                  <img src={getOptimizedCatalogImageUrl(variantImage.image_url, 240, 74)} alt={`${product.name} - ${variant.name}`} />
                                 ) : (
                                   <span>Sem foto</span>
                                 )}
@@ -1913,6 +1936,10 @@ export default function CatalogPreviewPage() {
           object-position: left center;
         }
 
+        .cover-logo-print {
+          display: none;
+        }
+
         .cover-copy {
           margin-top: 62mm;
           max-width: 145mm;
@@ -2438,6 +2465,41 @@ export default function CatalogPreviewPage() {
           .cover-page {
             page-break-before: auto !important;
             break-before: auto !important;
+            background: #fff !important;
+            color: #271d19 !important;
+            border: 0 !important;
+          }
+
+          .cover-page::after,
+          .cover-camel-mark {
+            display: none !important;
+          }
+
+          .cover-logo-screen {
+            display: none !important;
+          }
+
+          .cover-logo-print {
+            display: block !important;
+          }
+
+          .cover-copy > span {
+            color: #ef7a00 !important;
+          }
+
+          .cover-copy h1,
+          .cover-copy p,
+          .cover-client strong,
+          .cover-client small,
+          .cover-footer,
+          .cover-footer strong,
+          .cover-footer span {
+            color: #271d19 !important;
+          }
+
+          .cover-client {
+            background: #fff !important;
+            border: 0.35mm solid #eadfd9 !important;
           }
 
           .catalog-document > .print-page:last-child {
