@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import AppSidebar from "@/components/AppSidebar";
 
 type Category = {
   id: string;
@@ -43,7 +44,6 @@ export default function CatalogoPage() {
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [loading, setLoading] = useState(true);
-  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     async function loadCatalog() {
@@ -97,20 +97,6 @@ export default function CatalogoPage() {
     loadCatalog();
   }, []);
 
-  async function handleSignOut() {
-    if (signingOut) return;
-
-    setSigningOut(true);
-
-    try {
-      await supabase.auth.signOut();
-      router.replace("/login");
-      router.refresh();
-    } finally {
-      setSigningOut(false);
-    }
-  }
-
   const filteredProducts = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
 
@@ -145,7 +131,9 @@ export default function CatalogoPage() {
   }
 
   return (
-    <main className="catalog-shell">
+    <main className="shell">
+      <AppSidebar />
+      <div className="catalog-shell">
       <section className="hero">
         <div className="hero-inner">
           <div className="brand-row">
@@ -167,15 +155,6 @@ export default function CatalogoPage() {
               <Link href="/" className="admin-link">
                 Área administrativa →
               </Link>
-
-              <button
-                type="button"
-                className="logout-button"
-                onClick={handleSignOut}
-                disabled={signingOut}
-              >
-                {signingOut ? "Saindo..." : "Sair da conta"}
-              </button>
             </div>
           </div>
 
@@ -305,7 +284,16 @@ export default function CatalogoPage() {
         )}
       </section>
 
+      </div>
+
       <style jsx>{`
+        .shell {
+          min-height: 100vh;
+          display: grid;
+          grid-template-columns: 250px minmax(0, 1fr);
+          background: #f6f2ee;
+        }
+
         .catalog-shell {
           min-height: 100vh;
           background: #f6f2ee;
@@ -689,6 +677,12 @@ export default function CatalogoPage() {
           place-items: center;
           color: #8a7f79;
           font-size: 13px;
+        }
+
+        @media (max-width: 980px) {
+          .shell {
+            grid-template-columns: 1fr;
+          }
         }
 
         @media (max-width: 940px) {

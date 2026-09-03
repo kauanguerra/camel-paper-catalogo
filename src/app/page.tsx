@@ -1,10 +1,10 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import AppSidebar from "@/components/AppSidebar";
+import { Plus, SlidersHorizontal } from "lucide-react";
 
 type ProductRow = {
   id: string;
@@ -47,7 +47,6 @@ type Product = {
 };
 
 export default function Home() {
-  const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [query, setQuery] = useState("");
@@ -56,7 +55,6 @@ export default function Home() {
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState("Todos");
-  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     async function loadCatalog() {
@@ -140,20 +138,6 @@ export default function Home() {
     loadCatalog();
   }, []);
 
-  async function handleSignOut() {
-    if (signingOut) return;
-
-    setSigningOut(true);
-
-    try {
-      await supabase.auth.signOut();
-      router.replace("/login");
-      router.refresh();
-    } finally {
-      setSigningOut(false);
-    }
-  }
-
   const cats = useMemo(
     () => ["Todos", ...categories.map((category) => category.name)],
     [categories]
@@ -185,52 +169,7 @@ export default function Home() {
 
   return (
     <main className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <Image
-            src="/brand/camel-paper-logo.png"
-            alt="Camel Paper"
-            width={180}
-            height={90}
-            priority
-          />
-        </div>
-
-        <nav>
-          <button className="nav active">
-            ▦ <span>Produtos</span>
-          </button>
-          <Link href="/categorias" className="nav menu-nav-link">
-            ▤ <span>Categorias</span>
-          </Link>
-          <Link href="/catalogos" className="nav catalog-nav-link">
-            ◫ <span>Catálogos</span>
-          </Link>
-          <Link href="/usuarios" className="nav menu-nav-link">
-            ♙ <span>Usuários</span>
-          </Link>
-        </nav>
-
-        <div className="admin account-footer">
-          <div className="account-user">
-            <div className="avatar">KG</div>
-            <div>
-              <strong>Administrador</strong>
-              <small>Camel Paper</small>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            className="sidebar-logout"
-            onClick={handleSignOut}
-            disabled={signingOut}
-          >
-            <span>↪</span>
-            {signingOut ? "Saindo..." : "Sair da conta"}
-          </button>
-        </div>
-      </aside>
+      <AppSidebar />
 
       <section className="content">
         <header>
@@ -242,8 +181,9 @@ export default function Home() {
             </p>
           </div>
 
-          <Link href="/produtos/novo" className="primary">
-            ＋ Novo produto
+          <Link href="/produtos/novo" className="primary premium-primary">
+            <Plus size={17} strokeWidth={2.4} />
+            Novo produto
           </Link>
         </header>
 
@@ -273,7 +213,7 @@ export default function Home() {
             className={filtersOpen ? "filter active-filter" : "filter"}
             onClick={() => setFiltersOpen((current) => !current)}
           >
-            ☷ Filtros
+            <SlidersHorizontal size={15} strokeWidth={2.2} /> Filtros
             {(cat !== "Todos" || statusFilter !== "Todos") && (
               <span className="filter-count">
                 {[cat !== "Todos", statusFilter !== "Todos"].filter(Boolean).length}
@@ -454,6 +394,200 @@ export default function Home() {
 
       <style jsx>{`
 
+        :global(.premium-sidebar) {
+          overflow: hidden;
+          background:
+            radial-gradient(circle at 35% 0%, rgba(239, 122, 0, 0.075), transparent 31%),
+            #fff;
+          border-right: 1px solid #ede4de;
+        }
+
+        :global(.premium-brand) {
+          position: relative;
+          min-height: 118px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin: 0 14px 8px;
+          padding: 18px 10px 20px;
+          border-bottom: 1px solid #f0e8e3;
+        }
+
+        :global(.brand-glow) {
+          position: absolute;
+          width: 92px;
+          height: 92px;
+          border-radius: 50%;
+          background: rgba(239, 122, 0, 0.08);
+          filter: blur(23px);
+          opacity: 0.85;
+          pointer-events: none;
+        }
+
+        :global(.premium-brand-image) {
+          position: relative;
+          width: 142px !important;
+          height: auto !important;
+          object-fit: contain;
+          transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+
+        :global(.premium-brand:hover .premium-brand-image) {
+          transform: translateY(-2px) scale(1.015);
+        }
+
+        :global(.premium-nav) {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          padding: 8px 14px 16px;
+        }
+
+        :global(.premium-nav-item) {
+          position: relative;
+          width: 100%;
+          min-height: 46px;
+          display: flex !important;
+          align-items: center;
+          gap: 11px;
+          padding: 0 13px !important;
+          border: 1px solid transparent !important;
+          border-radius: 12px !important;
+          background: transparent !important;
+          color: #665952 !important;
+          font-size: 12.5px !important;
+          font-weight: 760 !important;
+          line-height: 1.15;
+          letter-spacing: -0.01em;
+          text-align: left;
+          text-decoration: none !important;
+          cursor: pointer;
+          transition:
+            transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+            color 0.2s ease,
+            background 0.2s ease,
+            border-color 0.2s ease,
+            box-shadow 0.2s ease !important;
+        }
+
+        :global(.premium-nav-item:hover) {
+          transform: translateX(3px);
+          color: #8f2a18 !important;
+          background: #fff7f1 !important;
+          border-color: #f3dfd3 !important;
+          box-shadow: 0 8px 18px rgba(121, 64, 35, 0.055);
+        }
+
+        :global(.premium-nav-item.active) {
+          color: #8f2a18 !important;
+          background: linear-gradient(135deg, #fff3e5 0%, #fff8f2 100%) !important;
+          border-color: #f1d8c7 !important;
+          box-shadow: 0 9px 22px rgba(133, 68, 36, 0.085);
+        }
+
+        :global(.nav-active-rail) {
+          position: absolute;
+          left: -1px;
+          top: 10px;
+          bottom: 10px;
+          width: 3px;
+          border-radius: 0 999px 999px 0;
+          background: linear-gradient(180deg, #ef7a00, #9b2414);
+          box-shadow: 0 0 12px rgba(239, 122, 0, 0.32);
+        }
+
+        :global(.nav-icon-wrap) {
+          width: 31px;
+          height: 31px;
+          flex: 0 0 31px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 9px;
+          color: #8d7f77;
+          background: #faf6f3;
+          border: 1px solid #f0e7e2;
+          transition:
+            color 0.2s ease,
+            background 0.2s ease,
+            transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+            border-color 0.2s ease;
+        }
+
+        :global(.premium-nav-item:hover .nav-icon-wrap) {
+          color: #ef7a00;
+          background: #fff;
+          border-color: #efd6c6;
+          transform: scale(1.06) rotate(-2deg);
+        }
+
+        :global(.premium-nav-item.active .nav-icon-wrap) {
+          color: #fff;
+          background: linear-gradient(135deg, #ef7a00, #b93d17);
+          border-color: transparent;
+          box-shadow: 0 6px 14px rgba(194, 75, 19, 0.22);
+        }
+
+        :global(.nav-section-label) {
+          margin: 13px 12px 4px;
+          color: #b4a69e;
+          font-size: 8.5px;
+          font-weight: 900;
+          letter-spacing: 1.45px;
+          user-select: none;
+        }
+
+        :global(.premium-account-footer) {
+          margin: auto 14px 14px !important;
+          padding: 12px !important;
+          border: 1px solid #eee2db !important;
+          border-radius: 14px !important;
+          background: linear-gradient(180deg, #fff 0%, #fffaf6 100%) !important;
+          box-shadow: 0 10px 28px rgba(65, 42, 31, 0.055);
+        }
+
+        :global(.premium-avatar) {
+          position: relative;
+          overflow: hidden;
+          background: linear-gradient(135deg, #9b2414, #4b2720) !important;
+          color: #fff !important;
+          border: 2px solid #fff !important;
+          box-shadow: 0 0 0 2px #ef7a00, 0 5px 14px rgba(96, 47, 28, 0.16);
+        }
+
+        :global(.account-copy) {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        :global(.account-copy strong) {
+          overflow: hidden;
+          color: #352722;
+          font-size: 12px;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        :global(.account-copy small) {
+          color: #94857d;
+          font-size: 9.5px;
+        }
+
+        :global(.premium-primary) {
+          display: inline-flex !important;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+        }
+
+        :global(.premium-primary:hover) {
+          transform: translateY(-2px);
+          box-shadow: 0 10px 22px rgba(239, 122, 0, 0.2);
+        }
+
         .account-footer {
           flex-direction: column !important;
           align-items: stretch !important;
@@ -480,12 +614,13 @@ export default function Home() {
           font-size: 10px;
           font-weight: 900;
           cursor: pointer;
-          transition: background 0.18s ease, border-color 0.18s ease;
+          transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, color 0.18s ease;
         }
 
         .sidebar-logout:hover:not(:disabled) {
           background: #fff0e8;
           border-color: #e3c2b5;
+          transform: translateY(-1px);
         }
 
         .sidebar-logout:disabled {
@@ -493,8 +628,8 @@ export default function Home() {
           cursor: not-allowed;
         }
 
-        .sidebar-logout span {
-          font-size: 13px;
+        .sidebar-logout :global(svg) {
+          flex: 0 0 auto;
         }
 
         .active-filter {

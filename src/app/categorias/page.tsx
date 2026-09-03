@@ -1,10 +1,8 @@
 "use client";
 
-import Image from "next/image";
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import AppSidebar from "@/components/AppSidebar";
 
 type Category = {
   id: string;
@@ -19,7 +17,6 @@ type ProductCategory = {
 };
 
 export default function CategoriasPage() {
-  const router = useRouter();
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<ProductCategory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,7 +26,6 @@ export default function CategoriasPage() {
   const [editingName, setEditingName] = useState("");
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
-  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -137,20 +133,6 @@ export default function CategoriasPage() {
     setSaving(false);
   }
 
-  async function handleSignOut() {
-    if (signingOut) return;
-
-    setSigningOut(true);
-
-    try {
-      await supabase.auth.signOut();
-      router.replace("/login");
-      router.refresh();
-    } finally {
-      setSigningOut(false);
-    }
-  }
-
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return categories.filter((category) => !q || category.name.toLowerCase().includes(q));
@@ -160,36 +142,7 @@ export default function CategoriasPage() {
 
   return (
     <main className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <Image src="/brand/camel-paper-logo.png" alt="Camel Paper" width={180} height={90} priority />
-        </div>
-        <nav>
-          <Link href="/" className="nav">▦ <span>Produtos</span></Link>
-          <Link href="/categorias" className="nav active">▤ <span>Categorias</span></Link>
-          <Link href="/catalogos" className="nav">◫ <span>Catálogos</span></Link>
-          <Link href="/usuarios" className="nav">♙ <span>Usuários</span></Link>
-        </nav>
-        <div className="admin account-footer">
-          <div className="account-user">
-            <div className="avatar">KG</div>
-            <div>
-              <strong>Administrador</strong>
-              <small>Camel Paper</small>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            className="sidebar-logout"
-            onClick={handleSignOut}
-            disabled={signingOut}
-          >
-            <span>↪</span>
-            {signingOut ? "Saindo..." : "Sair da conta"}
-          </button>
-        </div>
-      </aside>
+      <AppSidebar />
 
       <section className="content">
         <header>
@@ -251,7 +204,51 @@ export default function CategoriasPage() {
       </section>
 
       <style jsx>{`
-        *{box-sizing:border-box}.shell{min-height:100vh;background:#f7f4f1;color:#352821;font-family:Arial,sans-serif;display:grid;grid-template-columns:245px 1fr}.sidebar{position:sticky;top:0;height:100vh;background:#fff;border-right:1px solid #e9dfd9;padding:28px 22px;display:flex;flex-direction:column}.brand{height:120px;display:flex;align-items:center}.brand :global(img){width:125px;height:auto;object-fit:contain}nav{display:flex;flex-direction:column;gap:8px;margin-top:28px}:global(.nav){min-height:48px;border-radius:12px;padding:0 14px;display:flex;align-items:center;gap:13px;color:#685d57;text-decoration:none;font-weight:800;font-size:14px}:global(.nav.active){background:#fff0e1;color:#8f2a18}.admin{margin-top:auto;border-top:1px solid #eee4de;padding-top:20px;display:flex;align-items:center;gap:11px}.avatar{width:42px;height:42px;border-radius:50%;background:#8f2a18;color:#fff;display:grid;place-items:center;font-weight:900}.admin strong,.admin small{display:block}.admin small{color:#9a8d86;margin-top:3px}.content{padding:42px 54px;max-width:1450px;width:100%}header{display:flex;justify-content:space-between;align-items:flex-start}.eyebrow{font-size:10px;font-weight:900;letter-spacing:1.8px;color:#ef7a00;margin:0 0 7px}h1{font-size:38px;margin:0;letter-spacing:-1.3px}.muted{color:#81756f;margin:8px 0 0;font-size:14px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:28px 0}.stats>div,.create-card,.table-card{background:#fff;border:1px solid #e5dbd5;border-radius:16px}.stats>div{padding:18px}.stats b{display:block;font-size:26px;color:#8f2a18}.stats span{font-size:11px;color:#8b7f78}.create-card{padding:20px;margin-bottom:14px}.create-card h2{margin:0;font-size:20px}.create-row{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:16px}input{min-height:44px;border:1px solid #ddd2cc;border-radius:10px;padding:0 13px;font:inherit;outline:none}input:focus{border-color:#ef7a00;box-shadow:0 0 0 3px rgba(239,122,0,.08)}button{border:1px solid #ded2cc;background:#fff;color:#8f2a18;border-radius:9px;padding:0 13px;min-height:38px;font-weight:900;cursor:pointer}.create-row button,.primary-small{background:#8f2a18!important;color:#fff!important;border-color:#8f2a18!important}.create-row button{min-height:44px}.danger{background:#fff5f1;color:#a43a28}.feedback{margin:12px 0;background:#fff7ef;border:1px solid #f0d0b4;color:#8f2a18;border-radius:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:12px}.feedback button{min-height:25px;border:0;padding:0 5px}.toolbar{margin:14px 0}.toolbar input{width:100%;background:#fff}.table-card{overflow:hidden}.table-head,.table-row{display:grid;grid-template-columns:minmax(260px,1.4fr) 130px 150px 280px;align-items:center;gap:12px;padding:14px 18px}.table-head{background:#faf7f4;color:#988a83;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.7px}.table-row{border-top:1px solid #eee5df;min-height:72px}.table-row strong,.table-row small{display:block}.table-row small{color:#948780;font-size:10px;margin-top:4px}.table-row b{color:#8f2a18;font-size:18px}.status{font-size:11px;font-weight:800;color:#978b84}.active-status{color:#3d8d58}.actions{display:flex;justify-content:flex-end;gap:7px}.edit-input{width:100%;min-height:38px}.empty{padding:40px;text-align:center;color:#8e817a}.account-footer{flex-direction:column!important;align-items:stretch!important;gap:11px!important}.account-user{display:flex;align-items:center;gap:10px}.sidebar-logout{width:100%;min-height:36px;border:1px solid #eadbd4;border-radius:9px;background:#fff8f4;color:#8f2a18;display:flex;align-items:center;justify-content:center;gap:7px;font-size:10px;font-weight:900;cursor:pointer;transition:background .18s ease,border-color .18s ease}.sidebar-logout:hover:not(:disabled){background:#fff0e8;border-color:#e3c2b5}.sidebar-logout:disabled{opacity:.55;cursor:not-allowed}.sidebar-logout span{font-size:13px}@media(max-width:900px){.shell{grid-template-columns:1fr}.sidebar{position:relative;height:auto}.content{padding:25px 18px}.stats{grid-template-columns:1fr}.table-card{overflow:auto}.table-head,.table-row{min-width:820px}.create-row{grid-template-columns:1fr}}
+        *{box-sizing:border-box}
+        .shell{min-height:100vh;background:#f7f4f1;color:#352821;font-family:Arial,sans-serif;display:grid;grid-template-columns:245px 1fr}
+        .content{padding:42px 54px;max-width:1450px;width:100%}
+        header{display:flex;justify-content:space-between;align-items:flex-start}
+        .eyebrow{font-size:10px;font-weight:900;letter-spacing:1.8px;color:#ef7a00;margin:0 0 7px}
+        h1{font-size:38px;margin:0;letter-spacing:-1.3px}
+        .muted{color:#81756f;margin:8px 0 0;font-size:14px}
+        .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:28px 0}
+        .stats>div,.create-card,.table-card{background:#fff;border:1px solid #e5dbd5;border-radius:16px}
+        .stats>div{padding:18px}
+        .stats b{display:block;font-size:26px;color:#8f2a18}
+        .stats span{font-size:11px;color:#8b7f78}
+        .create-card{padding:20px;margin-bottom:14px}
+        .create-card h2{margin:0;font-size:20px}
+        .create-row{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:16px}
+        input{min-height:44px;border:1px solid #ddd2cc;border-radius:10px;padding:0 13px;font:inherit;outline:none}
+        input:focus{border-color:#ef7a00;box-shadow:0 0 0 3px rgba(239,122,0,.08)}
+        button{border:1px solid #ded2cc;background:#fff;color:#8f2a18;border-radius:9px;padding:0 13px;min-height:38px;font-weight:900;cursor:pointer}
+        .create-row button,.primary-small{background:#8f2a18!important;color:#fff!important;border-color:#8f2a18!important}
+        .create-row button{min-height:44px}
+        .danger{background:#fff5f1;color:#a43a28}
+        .feedback{margin:12px 0;background:#fff7ef;border:1px solid #f0d0b4;color:#8f2a18;border-radius:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;font-weight:700;font-size:12px}
+        .feedback button{min-height:25px;border:0;padding:0 5px}
+        .toolbar{margin:14px 0}
+        .toolbar input{width:100%;background:#fff}
+        .table-card{overflow:hidden}
+        .table-head,.table-row{display:grid;grid-template-columns:minmax(260px,1.4fr) 130px 150px 280px;align-items:center;gap:12px;padding:14px 18px}
+        .table-head{background:#faf7f4;color:#988a83;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.7px}
+        .table-row{border-top:1px solid #eee5df;min-height:72px}
+        .table-row strong,.table-row small{display:block}
+        .table-row small{color:#948780;font-size:10px;margin-top:4px}
+        .table-row b{color:#8f2a18;font-size:18px}
+        .status{font-size:11px;font-weight:800;color:#978b84}
+        .active-status{color:#3d8d58}
+        .actions{display:flex;justify-content:flex-end;gap:7px}
+        .edit-input{width:100%;min-height:38px}
+        .empty{padding:40px;text-align:center;color:#8e817a}
+        @media(max-width:900px){
+          .shell{grid-template-columns:1fr}
+          .content{padding:25px 18px}
+          .stats{grid-template-columns:1fr}
+          .table-card{overflow:auto}
+          .table-head,.table-row{min-width:820px}
+          .create-row{grid-template-columns:1fr}
+        }
       `}</style>
     </main>
   );

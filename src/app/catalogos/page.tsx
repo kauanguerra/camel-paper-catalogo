@@ -1,10 +1,10 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import AppSidebar from "@/components/AppSidebar";
 
 type Category = {
   id: string;
@@ -75,7 +75,6 @@ export default function CatalogosAdminPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [feedback, setFeedback] = useState("");
-  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     async function loadData() {
@@ -324,69 +323,9 @@ export default function CatalogosAdminPage() {
     }
   }
 
-  async function handleSignOut() {
-    if (signingOut) return;
-
-    setSigningOut(true);
-
-    try {
-      await supabase.auth.signOut();
-      router.replace("/login");
-      router.refresh();
-    } finally {
-      setSigningOut(false);
-    }
-  }
-
   return (
     <main className="page-shell">
-      <aside className="sidebar">
-        <Link href="/" className="brand-link">
-          <Image
-            src="/brand/camel-paper-logo.png"
-            alt="Camel Paper"
-            width={170}
-            height={70}
-            priority
-          />
-        </Link>
-
-        <nav>
-          <Link href="/" className="nav-link">
-            ▦ <span>Produtos</span>
-          </Link>
-          <span className="nav-link muted">▤ <span>Categorias</span></span>
-          <Link href="/catalogos" className="nav-link active">
-            ＋ <span>Criar catálogo</span>
-          </Link>
-          <Link href="/catalogos/gerenciar" className="nav-link">
-            ◫ <span>Central de catálogos</span>
-          </Link>
-          <Link href="/catalogo" className="nav-link">
-            ◉ <span>Catálogo de vendedor</span>
-          </Link>
-        </nav>
-
-        <div className="admin account-footer">
-          <div className="account-user">
-            <div className="avatar">KG</div>
-            <div>
-              <strong>Administrador</strong>
-              <small>Camel Paper</small>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            className="sidebar-logout"
-            onClick={handleSignOut}
-            disabled={signingOut}
-          >
-            <span>↪</span>
-            {signingOut ? "Saindo..." : "Sair da conta"}
-          </button>
-        </div>
-      </aside>
+      <AppSidebar />
 
       <section className="content">
         <header className="page-header">

@@ -1,10 +1,8 @@
 "use client";
 
-import Image from "next/image";
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import AppSidebar from "@/components/AppSidebar";
 
 type Profile = {
   id: string;
@@ -24,7 +22,6 @@ const ROLE_OPTIONS = [
 ];
 
 export default function UsuariosPage() {
-  const router = useRouter();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -40,7 +37,6 @@ export default function UsuariosPage() {
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState("seller");
   const [creatingUser, setCreatingUser] = useState(false);
-  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     loadProfiles();
@@ -216,20 +212,6 @@ export default function UsuariosPage() {
     }
   }
 
-  async function handleSignOut() {
-    if (signingOut) return;
-
-    setSigningOut(true);
-
-    try {
-      await supabase.auth.signOut();
-      router.replace("/login");
-      router.refresh();
-    } finally {
-      setSigningOut(false);
-    }
-  }
-
   const filteredProfiles = useMemo(() => {
     const normalized = query.trim().toLowerCase();
 
@@ -250,52 +232,7 @@ export default function UsuariosPage() {
 
   return (
     <main className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <Image
-            src="/brand/camel-paper-logo.png"
-            alt="Camel Paper"
-            width={180}
-            height={90}
-            priority
-          />
-        </div>
-
-        <nav>
-          <Link href="/" className="nav">
-            ▦ <span>Produtos</span>
-          </Link>
-          <Link href="/categorias" className="nav">
-            ▤ <span>Categorias</span>
-          </Link>
-          <Link href="/catalogos" className="nav">
-            ◫ <span>Catálogos</span>
-          </Link>
-          <Link href="/usuarios" className="nav active">
-            ♙ <span>Usuários</span>
-          </Link>
-        </nav>
-
-        <div className="admin account-footer">
-          <div className="account-user">
-            <div className="avatar">KG</div>
-            <div>
-              <strong>Administrador</strong>
-              <small>Camel Paper</small>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            className="sidebar-logout"
-            onClick={handleSignOut}
-            disabled={signingOut}
-          >
-            <span>↪</span>
-            {signingOut ? "Saindo..." : "Sair da conta"}
-          </button>
-        </div>
-      </aside>
+      <AppSidebar />
 
       <section className="content">
         <header>
