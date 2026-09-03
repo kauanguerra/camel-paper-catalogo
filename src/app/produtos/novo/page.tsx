@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import AppSidebar from "@/components/AppSidebar";
+import { ArrowLeft } from "lucide-react";
 
 type Category = {
   id: string;
@@ -151,13 +153,13 @@ export default function NovoProdutoPage() {
     if (!file) return;
 
     if (!ALLOWED_TYPES.includes(file.type)) {
-      alert("Use uma imagem JPG, PNG ou WEBP.");
+      setFeedback("Use uma imagem JPG, PNG ou WEBP.");
       e.target.value = "";
       return;
     }
 
     if (file.size > MAX_FILE_SIZE) {
-      alert("A imagem deve ter no máximo 10 MB.");
+      setFeedback("A imagem deve ter no máximo 10 MB.");
       e.target.value = "";
       return;
     }
@@ -459,6 +461,8 @@ export default function NovoProdutoPage() {
 
   return (
     <main className="page-shell">
+      <AppSidebar />
+      <section className="internal-content">
       <div className="page-container">
         <header className="page-header">
           <button
@@ -466,7 +470,7 @@ export default function NovoProdutoPage() {
             className="back-button"
             onClick={() => router.back()}
           >
-            ← Voltar
+            <ArrowLeft size={16} strokeWidth={2} /> Voltar
           </button>
 
           <div className="eyebrow">CATÁLOGO INTERNO</div>
@@ -801,12 +805,26 @@ export default function NovoProdutoPage() {
         </form>
       </div>
 
+      </section>
+
       <style jsx>{`
         .page-shell {
           min-height: 100vh;
           background: #f8f6f3;
-          padding: 42px 34px 70px;
           color: #271b17;
+          display: grid;
+          grid-template-columns: 245px 1fr;
+        }
+
+        .internal-content {
+          min-width: 0;
+          padding: 42px 34px 70px;
+          animation: pageIn .28s ease both;
+        }
+
+        @keyframes pageIn {
+          from { opacity: 0; transform: translateY(6px); }
+          to { opacity: 1; transform: translateY(0); }
         }
 
         .page-container {
@@ -828,6 +846,9 @@ export default function NovoProdutoPage() {
           padding: 0;
           margin-bottom: 24px;
           cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
         }
 
         .eyebrow {

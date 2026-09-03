@@ -4,6 +4,7 @@ import Image from "next/image";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { Eye, EyeOff, LogIn } from "lucide-react";
 
 type Profile = {
   id: string;
@@ -137,7 +138,7 @@ export default function LoginPage() {
       <main className="loading-page">
         <div className="loading-card">
           <Image
-            src="/brand/camel-paper-logo.png"
+            src="/brand/camel-colorido.svg"
             alt="Camel Paper"
             width={190}
             height={76}
@@ -179,7 +180,7 @@ export default function LoginPage() {
       <section className="brand-side">
         <div className="brand-content">
           <Image
-            src="/brand/camel-paper-logo.png"
+            src="/brand/camel-branco.svg"
             alt="Camel Paper"
             width={300}
             height={120}
@@ -206,7 +207,7 @@ export default function LoginPage() {
         <div className="login-card">
           <div className="mobile-logo">
             <Image
-              src="/brand/camel-paper-logo.png"
+              src="/brand/camel-colorido.svg"
               alt="Camel Paper"
               width={180}
               height={72}
@@ -251,7 +252,7 @@ export default function LoginPage() {
                   onClick={() => setShowPassword((current) => !current)}
                   disabled={loading}
                 >
-                  {showPassword ? "Ocultar" : "Mostrar"}
+                  {showPassword ? <><EyeOff size={15} /> Ocultar</> : <><Eye size={15} /> Mostrar</>}
                 </button>
               </div>
             </label>
@@ -263,7 +264,7 @@ export default function LoginPage() {
               className="login-button"
               disabled={loading}
             >
-              {loading ? "Entrando..." : "Entrar →"}
+              {loading ? "Entrando..." : <><LogIn size={16} /> Entrar</>}
             </button>
           </form>
 
@@ -274,6 +275,14 @@ export default function LoginPage() {
       </section>
 
       <style jsx>{`
+        .login-card{animation:loginCardIn .38s ease both}
+        .brand-content{animation:brandIn .45s ease both}
+        .login-button,.show-password{display:inline-flex;align-items:center;justify-content:center;gap:7px}
+        .login-button:hover:not(:disabled){transform:translateY(-1px)}
+        @keyframes loginCardIn{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes brandIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+        @media(prefers-reduced-motion:reduce){.login-card,.brand-content{animation:none!important}}
+
         * {
           box-sizing: border-box;
         }
@@ -324,7 +333,6 @@ export default function LoginPage() {
           height: 90px;
           object-fit: contain;
           object-position: left center;
-          filter: brightness(0) invert(1);
         }
 
         .brand-copy {

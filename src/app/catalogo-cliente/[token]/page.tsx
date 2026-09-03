@@ -469,7 +469,7 @@ export default function CatalogoClientePage() {
 
             <div className="catalog-loading-logo">
               <Image
-                src="/brand/camel-paper-logo.png"
+                src="/brand/camel-colorido.svg"
                 alt="Camel Paper"
                 width={210}
                 height={82}
@@ -496,6 +496,19 @@ export default function CatalogoClientePage() {
         </div>
 
         <style jsx>{`
+        .hero-card,.product-card,.send-card,.success-card,.gallery-modal{
+          animation: clientFadeUp .32s ease both;
+        }
+        .product-card,.variant-main-button,.view-photos,.send-button,.stepper button,.gallery-close{
+          transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background .18s ease;
+        }
+        .product-card:hover{transform:translateY(-2px);box-shadow:0 18px 42px rgba(63,39,25,.08)}
+        .variant-main-button:hover:not(:disabled),.view-photos:hover,.send-button:hover:not(:disabled){transform:translateY(-1px)}
+        @keyframes clientFadeUp{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+        @media(prefers-reduced-motion:reduce){
+          .hero-card,.product-card,.send-card,.success-card,.gallery-modal{animation:none!important}
+        }
+
           .catalog-loading-page {
             min-height: 100vh;
             box-sizing: border-box;
@@ -739,7 +752,7 @@ export default function CatalogoClientePage() {
     return (
       <main className="state-page">
         <Image
-          src="/brand/camel-paper-logo.png"
+          src="/brand/camel-colorido.svg"
           alt="Camel Paper"
           width={190}
           height={76}
@@ -756,7 +769,7 @@ export default function CatalogoClientePage() {
       <main className="success-page">
         <div className="success-card">
           <Image
-            src="/brand/camel-paper-logo.png"
+            src="/brand/camel-colorido.svg"
             alt="Camel Paper"
             width={210}
             height={82}
@@ -866,7 +879,7 @@ export default function CatalogoClientePage() {
       <header className="client-header">
         <div className="header-inner">
           <Image
-            src="/brand/camel-paper-logo.png"
+            src="/brand/camel-colorido.svg"
             alt="Camel Paper"
             width={190}
             height={72}
@@ -1381,7 +1394,7 @@ export default function CatalogoClientePage() {
 
       <footer>
         <Image
-          src="/brand/camel-paper-logo.png"
+          src="/brand/camel-colorido.svg"
           alt="Camel Paper"
           width={140}
           height={55}

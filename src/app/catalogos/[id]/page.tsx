@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { ArrowLeft, Copy, Link2Off } from "lucide-react";
 
 type Catalog = {
   id: string;
@@ -493,7 +494,7 @@ export default function CatalogPreviewPage() {
     <main className="preview-shell">
       <div className="toolbar no-print">
         <div>
-          <Link href="/catalogos">← Voltar aos catálogos</Link>
+          <Link href="/catalogos"><ArrowLeft size={15} /> Voltar aos catálogos</Link>
           <strong>{catalog.name}</strong>
         </div>
 
@@ -501,10 +502,10 @@ export default function CatalogPreviewPage() {
           {catalog.share_enabled && catalog.share_token ? (
             <>
               <button type="button" className="share-button" onClick={copyShareLink}>
-                Copiar link do cliente
+                <Copy size={14} /> Copiar link do cliente
               </button>
               <button type="button" onClick={disableShare} disabled={sharing}>
-                {sharing ? "Aguarde..." : "Desativar link"}
+                {sharing ? "Aguarde..." : <><Link2Off size={14} /> Desativar link</>}
               </button>
             </>
           ) : (
@@ -792,7 +793,7 @@ export default function CatalogPreviewPage() {
           <section className="response-print-sheet">
             <header className="response-print-header">
               <Image
-                src="/brand/camel-paper-logo.png"
+                src="/brand/camel-colorido.svg"
                 alt="Camel Paper"
                 width={190}
                 height={74}
@@ -911,13 +912,22 @@ export default function CatalogPreviewPage() {
         <section className="cover-page print-page">
           <div className="cover-brand">
             <Image
-              src="/brand/camel-paper-logo.png"
+              src="/brand/camel-branco.svg"
               alt="Camel Paper"
               width={330}
               height={130}
               priority
             />
           </div>
+
+          <Image
+            className="cover-camel-mark"
+            src="/brand/camelo-marrom.svg"
+            alt=""
+            aria-hidden="true"
+            width={900}
+            height={650}
+          />
 
           <div className="cover-copy">
             <span>CATÁLOGO COMERCIAL</span>
@@ -950,7 +960,7 @@ export default function CatalogPreviewPage() {
         <section className="index-page print-page">
           <div className="page-brand">
             <Image
-              src="/brand/camel-paper-logo.png"
+              src="/brand/camel-colorido.svg"
               alt="Camel Paper"
               width={180}
               height={70}
@@ -1022,7 +1032,7 @@ export default function CatalogPreviewPage() {
             <section className="product-page print-page" key={product.id}>
               <header className="product-page-header">
                 <Image
-                  src="/brand/camel-paper-logo.png"
+                  src="/brand/camel-colorido.svg"
                   alt="Camel Paper"
                   width={150}
                   height={60}
@@ -1179,6 +1189,25 @@ export default function CatalogPreviewPage() {
       </section>
 
       <style jsx>{`
+        .toolbar :global(a), .toolbar button, .pdf-action, .print-action {
+          transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
+        }
+        .toolbar :global(a), .toolbar button {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+        }
+        .toolbar button:hover:not(:disabled), .pdf-action:hover, .print-action:hover {
+          transform: translateY(-1px);
+        }
+        .share-panel, .responses-panel {
+          animation: adminFadeUp .28s ease both;
+        }
+        @keyframes adminFadeUp {
+          from { opacity: 0; transform: translateY(6px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
         .preview-shell {
           min-height: 100vh;
           background: #e9e4df;
@@ -1819,12 +1848,23 @@ export default function CatalogPreviewPage() {
         .cover-page::after {
           content: "";
           position: absolute;
-          width: 170mm;
-          height: 170mm;
-          right: -70mm;
-          bottom: -70mm;
-          border-radius: 50%;
-          border: 30mm solid rgba(239, 122, 0, 0.15);
+          inset: 0;
+          background: linear-gradient(115deg, transparent 42%, rgba(239, 122, 0, 0.055));
+          pointer-events: none;
+        }
+
+        .cover-camel-mark {
+          position: absolute;
+          width: 185mm;
+          height: auto;
+          right: -56mm;
+          bottom: -12mm;
+          opacity: .18;
+          transform: rotate(-4deg);
+          filter: brightness(1.55) saturate(.75);
+          pointer-events: none;
+          user-select: none;
+          z-index: 1;
         }
 
         .cover-brand {
@@ -1837,7 +1877,6 @@ export default function CatalogPreviewPage() {
           height: 34mm;
           object-fit: contain;
           object-position: left center;
-          filter: brightness(0) invert(1);
         }
 
         .cover-copy {

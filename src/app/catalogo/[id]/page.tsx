@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { ArrowLeft, Share2 } from "lucide-react";
 
 type Product = {
   id: string;
@@ -345,6 +346,18 @@ export default function CatalogoProdutoPage() {
         </div>
 
         <style jsx>{`
+        .share-top-button,.back-top-button,.share-main-button,.catalog-main-button{
+          display:inline-flex;align-items:center;justify-content:center;gap:7px;
+        }
+        .gallery,.product-content,.variants-card,.copy-section{
+          animation: sellerFadeUp .3s ease both;
+        }
+        .thumbnail-card,.variant-selector,.share-top-button,.back-top-button,.share-main-button,.catalog-main-button{
+          transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background .18s ease;
+        }
+        .thumbnail-card:hover,.variant-selector:hover{transform:translateY(-2px)}
+        @keyframes sellerFadeUp{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+
           .state-page {
             min-height: 100vh;
             display: grid;
@@ -380,7 +393,7 @@ export default function CatalogoProdutoPage() {
           <div className="brand">
             <div className="brand-logo">
               <Image
-                src="/brand/camel-paper-logo.png"
+                src="/brand/camel-colorido.svg"
                 alt="Camel Paper"
                 width={220}
                 height={80}
@@ -397,7 +410,7 @@ export default function CatalogoProdutoPage() {
               className="share-top-button"
               onClick={handleShare}
             >
-              Compartilhar ficha
+              <Share2 size={15} /> Compartilhar ficha
             </button>
 
             <button
@@ -428,7 +441,7 @@ export default function CatalogoProdutoPage() {
               <div className="empty-image">
                 <div className="empty-logo">
                   <Image
-                    src="/brand/camel-paper-logo.png"
+                    src="/brand/camel-colorido.svg"
                     alt="Camel Paper"
                     width={180}
                     height={70}
