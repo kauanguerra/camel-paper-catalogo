@@ -405,6 +405,35 @@ export default function CatalogPreviewPage() {
     }
   }
 
+  function cleanCatalogText(value: string | null | undefined) {
+    if (!value) return "";
+
+    return value
+      .replace(/#{1,6}\s*/g, "")
+      .replace(/\*\*/g, "")
+      .replace(/^\s*[-*•]\s+/gm, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function getCatalogSummary(value: string | null | undefined, maxLength = 145) {
+    const cleaned = cleanCatalogText(value);
+    if (!cleaned) return "";
+
+    // Remove um título repetido no início quando a descrição veio em Markdown.
+    const withoutRepeatedHeading = cleaned.replace(
+      /^(.*?)\s+(?=(A|O|Os|As|Ideal|Prático|Prática|Tenha|Mantenha|Desenvolvido|Com)\b)/,
+      ""
+    ).trim();
+
+    const summary = withoutRepeatedHeading || cleaned;
+    if (summary.length <= maxLength) return summary;
+
+    const cut = summary.slice(0, maxLength + 1);
+    const lastSpace = cut.lastIndexOf(" ");
+    return `${cut.slice(0, lastSpace > 90 ? lastSpace : maxLength).trim()}…`;
+  }
+
   function formatMoney(value: number | null | undefined) {
     return new Intl.NumberFormat("pt-BR", {
       style: "currency",
@@ -969,7 +998,7 @@ export default function CatalogPreviewPage() {
 
           <div className="index-content">
             <span className="section-eyebrow">CONTEÚDO</span>
-            <h2>Produtos deste catálogo</h2>
+            <h2>Conteúdo do catálogo</h2>
 
             <div className="index-list">
               {products.map((product, index) => (
@@ -1097,9 +1126,9 @@ export default function CatalogPreviewPage() {
                   </div>
 
                   {visibility.description && product.description && (
-                    <div className="copy-block">
+                    <div className="copy-block catalog-summary">
                       <h3>Sobre o produto</h3>
-                      <p>{product.description}</p>
+                      <p>{getCatalogSummary(product.description)}</p>
                     </div>
                   )}
 
@@ -1823,9 +1852,14 @@ export default function CatalogPreviewPage() {
 
         .print-page {
           width: 210mm;
+          height: 297mm;
           min-height: 297mm;
+          max-height: 297mm;
           box-sizing: border-box;
+          overflow: hidden;
           background: #fff;
+          page-break-inside: avoid;
+          break-inside: avoid-page;
           page-break-after: always;
           break-after: page;
         }
@@ -1954,7 +1988,7 @@ export default function CatalogPreviewPage() {
         }
 
         .index-page {
-          padding: 20mm 22mm;
+          padding: 15mm 18mm 14mm;
         }
 
         .page-brand :global(img) {
@@ -1965,49 +1999,50 @@ export default function CatalogPreviewPage() {
         }
 
         .index-content {
-          margin-top: 26mm;
+          margin-top: 12mm;
         }
 
         .index-content h2 {
-          margin: 3mm 0 12mm;
-          font-size: 12mm;
-          letter-spacing: -0.8mm;
+          margin: 2mm 0 7mm;
+          font-size: 10mm;
+          letter-spacing: -0.65mm;
         }
 
         .index-list {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 4mm 8mm;
+          gap: 1.6mm 7mm;
         }
 
         .index-list > div {
-          min-height: 16mm;
+          min-height: 10.5mm;
           border-bottom: 0.25mm solid #e7ded8;
           display: grid;
-          grid-template-columns: 12mm 1fr;
+          grid-template-columns: 9mm 1fr;
           grid-template-rows: auto auto;
           align-content: center;
-          column-gap: 3mm;
+          column-gap: 2mm;
         }
 
         .index-list > div > span {
           grid-row: 1 / 3;
           color: #ef7a00;
-          font-size: 4mm;
+          font-size: 3.2mm;
           font-weight: 900;
         }
 
         .index-list strong {
-          font-size: 3.8mm;
+          font-size: 3mm;
+          line-height: 1.1;
         }
 
         .index-list small {
           color: #948982;
-          font-size: 2.7mm;
+          font-size: 2.1mm;
         }
 
         .product-page {
-          padding: 14mm 16mm 16mm;
+          padding: 10mm 13mm 11mm;
         }
 
         .product-page-header {
@@ -2032,10 +2067,10 @@ export default function CatalogPreviewPage() {
         }
 
         .product-layout {
-          margin-top: 12mm;
+          margin-top: 7mm;
           display: grid;
-          grid-template-columns: 92mm 1fr;
-          gap: 12mm;
+          grid-template-columns: 86mm 1fr;
+          gap: 9mm;
           align-items: start;
         }
 
@@ -2045,7 +2080,7 @@ export default function CatalogPreviewPage() {
 
         .product-main-image {
           position: relative;
-          height: 166mm;
+          height: 145mm;
           border: 0.25mm solid #eadfd9;
           border-radius: 5mm;
           background: radial-gradient(circle at 50% 42%, #fff 0%, #fff 58%, #fbf7f3 100%);
@@ -2084,7 +2119,7 @@ export default function CatalogPreviewPage() {
         }
 
         .thumbnail-card {
-          height: 54mm;
+          height: 42mm;
           overflow: hidden;
           border: 0.25mm solid #eadfd9;
           border-radius: 3.5mm;
@@ -2125,14 +2160,14 @@ export default function CatalogPreviewPage() {
         }
 
         .product-info h2 {
-          margin: 3mm 0 0;
-          font-size: 11mm;
+          margin: 2mm 0 0;
+          font-size: 8.5mm;
           line-height: 0.98;
-          letter-spacing: -0.8mm;
+          letter-spacing: -0.55mm;
         }
 
         .catalog-price {
-          margin-top: 5mm;
+          margin-top: 3.5mm;
           width: fit-content;
           min-width: 46mm;
           padding: 4mm 5mm;
@@ -2159,7 +2194,7 @@ export default function CatalogPreviewPage() {
         }
 
         .codes {
-          margin-top: 6mm;
+          margin-top: 3.5mm;
           display: flex;
           flex-wrap: wrap;
           gap: 2.5mm;
@@ -2194,8 +2229,8 @@ export default function CatalogPreviewPage() {
         }
 
         .copy-block {
-          margin-top: 6mm;
-          padding-top: 5mm;
+          margin-top: 3.5mm;
+          padding-top: 3mm;
           border-top: 0.25mm solid #e8ded8;
         }
 
@@ -2206,11 +2241,18 @@ export default function CatalogPreviewPage() {
 
         .copy-block p,
         .highlight-block p {
-          margin: 2.5mm 0 0;
+          margin: 1.8mm 0 0;
           color: #74665f;
-          font-size: 3.2mm;
-          line-height: 1.55;
+          font-size: 2.8mm;
+          line-height: 1.4;
           white-space: pre-line;
+        }
+
+        .catalog-summary p {
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 4;
+          overflow: hidden;
         }
 
         .copy-block.compact p {
@@ -2218,7 +2260,7 @@ export default function CatalogPreviewPage() {
         }
 
         .highlight-block {
-          margin-top: 6mm;
+          margin-top: 3.5mm;
           padding: 4mm;
           border-radius: 3mm;
           border: 0.25mm solid #efd6c0;
@@ -2233,7 +2275,7 @@ export default function CatalogPreviewPage() {
         }
 
         .spec-grid {
-          margin-top: 6mm;
+          margin-top: 3.5mm;
           display: grid;
           grid-template-columns: 1fr 1fr;
           gap: 2.5mm;
@@ -2247,8 +2289,8 @@ export default function CatalogPreviewPage() {
 
 
         .catalog-variants-block {
-          margin-top: 5mm;
-          padding-top: 4mm;
+          margin-top: 3.5mm;
+          padding-top: 3mm;
           border-top: 0.25mm solid #eadfd9;
         }
 
@@ -2293,20 +2335,20 @@ export default function CatalogPreviewPage() {
 
         .catalog-variant-card {
           min-width: 0;
-          padding: 2.2mm;
+          padding: 1.6mm;
           border: 0.25mm solid #eadfd9;
           border-radius: 2.8mm;
           background: #fcfaf8;
           display: grid;
-          grid-template-columns: 19mm minmax(0, 1fr);
+          grid-template-columns: 15mm minmax(0, 1fr);
           gap: 2.5mm;
           align-items: center;
           break-inside: avoid;
         }
 
         .catalog-variant-image {
-          width: 19mm;
-          height: 19mm;
+          width: 15mm;
+          height: 15mm;
           border-radius: 2mm;
           overflow: hidden;
           background: #fff;
@@ -2357,8 +2399,14 @@ export default function CatalogPreviewPage() {
             margin: 0;
           }
 
+          html,
           body {
+            width: 210mm !important;
+            margin: 0 !important;
+            padding: 0 !important;
             background: #fff !important;
+            print-color-adjust: exact !important;
+            -webkit-print-color-adjust: exact !important;
           }
 
           .no-print {
@@ -2377,7 +2425,37 @@ export default function CatalogPreviewPage() {
           }
 
           .print-page {
-            margin: 0;
+            margin: 0 !important;
+            width: 210mm !important;
+            height: 297mm !important;
+            min-height: 297mm !important;
+            max-height: 297mm !important;
+            overflow: hidden !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid-page !important;
+          }
+
+          .cover-page {
+            page-break-before: auto !important;
+            break-before: auto !important;
+          }
+
+          .catalog-document > .print-page:last-child {
+            page-break-after: auto !important;
+            break-after: auto !important;
+          }
+
+          .product-page .highlight-block,
+          .product-page .copy-block.compact {
+            display: none !important;
+          }
+
+          .product-page .catalog-summary {
+            display: block !important;
+          }
+
+          .product-page .catalog-variants-heading small {
+            display: none !important;
           }
 
           .response-print-sheet {
