@@ -17,8 +17,19 @@ type Product = {
   sku: string | null;
   internal_code: string | null;
   category_id: string | null;
+  catalog_group_id: string | null;
   active: boolean;
   sale_price: number | null;
+  unit_price: number | null;
+  package_price: number | null;
+  master_package_quantity: number | null;
+  master_price: number | null;
+};
+
+type CatalogGroup = {
+  id: string;
+  name: string;
+  position: number;
 };
 
 type ProductImage = {
@@ -58,7 +69,13 @@ export default function CatalogosAdminPage() {
   const [catalogs, setCatalogs] = useState<Catalog[]>([]);
   const [catalogResponses, setCatalogResponses] = useState<CatalogResponseSummary[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
-  const [customPrices, setCustomPrices] = useState<Record<string, string>>({});
+  const [catalogGroups, setCatalogGroups] = useState<CatalogGroup[]>([]);
+  const [customUnitPrices, setCustomUnitPrices] = useState<Record<string, string>>({});
+  const [customPackagePrices, setCustomPackagePrices] = useState<Record<string, string>>({});
+  const [customMasterPrices, setCustomMasterPrices] = useState<Record<string, string>>({});
+  const [showUnitPrices, setShowUnitPrices] = useState<Record<string, boolean>>({});
+  const [showPackagePrices, setShowPackagePrices] = useState<Record<string, boolean>>({});
+  const [showMasterPrices, setShowMasterPrices] = useState<Record<string, boolean>>({});
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [query, setQuery] = useState("");
   const [name, setName] = useState("Catálogo Geral Camel Paper");
@@ -82,6 +99,7 @@ export default function CatalogosAdminPage() {
 
       const [
         categoriesResult,
+        groupsResult,
         productsResult,
         imagesResult,
         catalogsResult,
@@ -94,8 +112,15 @@ export default function CatalogosAdminPage() {
           .order("name"),
 
         supabase
+          .from("catalog_groups")
+          .select("id, name, position")
+          .eq("active", true)
+          .order("position")
+          .order("name"),
+
+        supabase
           .from("products")
-          .select("id, name, sku, internal_code, category_id, active, sale_price")
+          .select("id, name, sku, internal_code, category_id, catalog_group_id, active, sale_price, unit_price, package_price, master_package_quantity, master_price")
           .eq("active", true)
           .order("name"),
 
@@ -119,6 +144,10 @@ export default function CatalogosAdminPage() {
 
       if (!categoriesResult.error) {
         setCategories((categoriesResult.data || []) as Category[]);
+      }
+
+      if (!groupsResult.error) {
+        setCatalogGroups((groupsResult.data || []) as CatalogGroup[]);
       }
 
       if (!productsResult.error) {
@@ -184,21 +213,73 @@ export default function CatalogosAdminPage() {
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  function getCatalogPrice(product: Product) {
-    const value = customPrices[product.id];
-    return value !== undefined && value.trim() !== "" ? priceToNumber(value) : product.sale_price;
+  type PriceLevel = "unit" | "package" | "master";
+
+  function getDefaultPrice(product: Product, level: PriceLevel) {
+    if (level === "unit") return product.unit_price;
+    if (level === "master") return product.master_price;
+    return product.package_price ?? product.sale_price;
   }
 
-  function updateCustomPrice(productId: string, value: string) {
-    setCustomPrices((current) => ({ ...current, [productId]: value.replace(/[^0-9,.-]/g, "") }));
+  function getCustomPriceMap(level: PriceLevel) {
+    if (level === "unit") return customUnitPrices;
+    if (level === "master") return customMasterPrices;
+    return customPackagePrices;
   }
 
-  function resetCustomPrice(productId: string) {
-    setCustomPrices((current) => {
+  function getCatalogPrice(product: Product, level: PriceLevel) {
+    const value = getCustomPriceMap(level)[product.id];
+    return value !== undefined && value.trim() !== ""
+      ? priceToNumber(value)
+      : getDefaultPrice(product, level);
+  }
+
+  function updateCustomPrice(productId: string, level: PriceLevel, value: string) {
+    const clean = value.replace(/[^0-9,.-]/g, "");
+    const setter =
+      level === "unit"
+        ? setCustomUnitPrices
+        : level === "master"
+          ? setCustomMasterPrices
+          : setCustomPackagePrices;
+
+    setter((current) => ({ ...current, [productId]: clean }));
+  }
+
+  function resetCustomPrice(productId: string, level: PriceLevel) {
+    const setter =
+      level === "unit"
+        ? setCustomUnitPrices
+        : level === "master"
+          ? setCustomMasterPrices
+          : setCustomPackagePrices;
+
+    setter((current) => {
       const next = { ...current };
       delete next[productId];
       return next;
     });
+  }
+
+  function getShowPrice(productId: string, level: PriceLevel) {
+    if (level === "unit") return showUnitPrices[productId] ?? false;
+    if (level === "master") return showMasterPrices[productId] ?? false;
+    return showPackagePrices[productId] ?? true;
+  }
+
+  function setShowPrice(productId: string, level: PriceLevel, checked: boolean) {
+    const setter =
+      level === "unit"
+        ? setShowUnitPrices
+        : level === "master"
+          ? setShowMasterPrices
+          : setShowPackagePrices;
+
+    setter((current) => ({ ...current, [productId]: checked }));
+  }
+
+  function getGroupName(product: Product) {
+    return catalogGroups.find((group) => group.id === product.catalog_group_id)?.name || "Sem grupo comercial";
   }
 
   function toggleProduct(productId: string) {
@@ -207,6 +288,10 @@ export default function CatalogosAdminPage() {
         ? current.filter((id) => id !== productId)
         : [...current, productId]
     );
+  }
+
+  function selectAll() {
+    setSelectedProducts(products.map((product) => product.id));
   }
 
   function selectFiltered() {
@@ -219,7 +304,12 @@ export default function CatalogosAdminPage() {
 
   function clearSelection() {
     setSelectedProducts([]);
-    setCustomPrices({});
+    setCustomUnitPrices({});
+    setCustomPackagePrices({});
+    setCustomMasterPrices({});
+    setShowUnitPrices({});
+    setShowPackagePrices({});
+    setShowMasterPrices({});
   }
 
   function getCatalogResponses(catalogId: string) {
@@ -289,14 +379,39 @@ export default function CatalogosAdminPage() {
       }
 
       const rows = selectedProducts.map((productId, index) => {
-        const typedPrice = customPrices[productId];
+        const unitPrice = customUnitPrices[productId];
+        const packagePrice = customPackagePrices[productId];
+        const masterPrice = customMasterPrices[productId];
+
         return {
           catalog_id: catalog.id,
           product_id: productId,
           position: index,
+
+          custom_unit_price:
+            unitPrice !== undefined && unitPrice.trim() !== ""
+              ? priceToNumber(unitPrice)
+              : null,
+
+          custom_package_price:
+            packagePrice !== undefined && packagePrice.trim() !== ""
+              ? priceToNumber(packagePrice)
+              : null,
+
+          custom_master_price:
+            masterPrice !== undefined && masterPrice.trim() !== ""
+              ? priceToNumber(masterPrice)
+              : null,
+
+          show_unit_price: getShowPrice(productId, "unit"),
+          show_package_price: getShowPrice(productId, "package"),
+          show_master_price: getShowPrice(productId, "master"),
+
+          // Compatibilidade temporária com as telas antigas:
+          // custom_price continua representando o preço comercial do pacote.
           custom_price:
-            typedPrice !== undefined && typedPrice.trim() !== ""
-              ? priceToNumber(typedPrice)
+            packagePrice !== undefined && packagePrice.trim() !== ""
+              ? priceToNumber(packagePrice)
               : null,
         };
       });
@@ -463,7 +578,7 @@ export default function CatalogosAdminPage() {
                   <span>ETAPA 3</span>
                   <h2>Selecionar produtos</h2>
                   <p>
-                    Apenas produtos ativos entram na seleção. As fotos do catálogo
+                    Selecione produtos individualmente, por categoria ou todos de uma vez. As fotos do catálogo
                     usam as imagens profissionais aprovadas.
                   </p>
                 </div>
@@ -478,7 +593,11 @@ export default function CatalogosAdminPage() {
                   placeholder="Buscar produto, SKU ou código..."
                 />
 
-                <button type="button" onClick={selectFiltered}>
+                <button type="button" onClick={selectAll}>
+                  Selecionar todos
+                </button>
+
+                <button type="button" className="secondary" onClick={selectFiltered}>
                   Selecionar filtrados
                 </button>
 
@@ -548,9 +667,21 @@ export default function CatalogosAdminPage() {
                           <strong>{product.name}</strong>
                           <span>{product.sku || "SKU não informado"}</span>
 
-                          <div className="default-price">
-                            <small>Preço padrão</small>
-                            <b>{formatPrice(product.sale_price)}</b>
+                          <div className="group-chip">{getGroupName(product)}</div>
+
+                          <div className="default-prices">
+                            <div>
+                              <small>Unidade</small>
+                              <b>{formatPrice(product.unit_price)}</b>
+                            </div>
+                            <div>
+                              <small>Pacote</small>
+                              <b>{formatPrice(product.package_price ?? product.sale_price)}</b>
+                            </div>
+                            <div>
+                              <small>Master</small>
+                              <b>{formatPrice(product.master_price)}</b>
+                            </div>
                           </div>
 
                           {checked && (
@@ -559,30 +690,62 @@ export default function CatalogosAdminPage() {
                               onClick={(event) => event.stopPropagation()}
                               onKeyDown={(event) => event.stopPropagation()}
                             >
-                              <label>
-                                <span>Preço neste catálogo</span>
-                                <div className="price-input-wrap">
-                                  <span>R$</span>
-                                  <input
-                                    inputMode="decimal"
-                                    value={customPrices[product.id] ?? ""}
-                                    onChange={(event) => updateCustomPrice(product.id, event.target.value)}
-                                    placeholder={
-                                      product.sale_price != null
-                                        ? Number(product.sale_price).toFixed(2).replace(".", ",")
-                                        : "0,00"
-                                    }
-                                  />
-                                </div>
-                              </label>
-                              <div className="catalog-price-footer">
-                                <small>Final: {formatPrice(getCatalogPrice(product))}</small>
-                                {customPrices[product.id]?.trim() && (
-                                  <button type="button" onClick={() => resetCustomPrice(product.id)}>
-                                    Usar padrão
-                                  </button>
-                                )}
-                              </div>
+                              {(["unit", "package", "master"] as PriceLevel[]).map((level) => {
+                                const label =
+                                  level === "unit" ? "Unidade" : level === "package" ? "Pacote" : "Caixa master";
+                                const customMap = getCustomPriceMap(level);
+                                const defaultPrice = getDefaultPrice(product, level);
+
+                                return (
+                                  <div className="price-level-row" key={level}>
+                                    <label className="price-visible-toggle">
+                                      <input
+                                        type="checkbox"
+                                        checked={getShowPrice(product.id, level)}
+                                        onChange={(event) => setShowPrice(product.id, level, event.target.checked)}
+                                      />
+                                      <span>Exibir {label.toLowerCase()}</span>
+                                    </label>
+
+                                    <label>
+                                      <span>Preço {label.toLowerCase()} neste catálogo</span>
+                                      <div className="price-input-wrap">
+                                        <span>R$</span>
+                                        <input
+                                          inputMode="decimal"
+                                          value={customMap[product.id] ?? ""}
+                                          onChange={(event) =>
+                                            updateCustomPrice(product.id, level, event.target.value)
+                                          }
+                                          placeholder={
+                                            defaultPrice != null
+                                              ? Number(defaultPrice).toFixed(2).replace(".", ",")
+                                              : "0,00"
+                                          }
+                                        />
+                                      </div>
+                                    </label>
+
+                                    <div className="catalog-price-footer">
+                                      <small>Final: {formatPrice(getCatalogPrice(product, level))}</small>
+                                      {customMap[product.id]?.trim() && (
+                                        <button
+                                          type="button"
+                                          onClick={() => resetCustomPrice(product.id, level)}
+                                        >
+                                          Usar padrão
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+
+                              {product.master_package_quantity && (
+                                <small className="master-note">
+                                  Caixa master: {product.master_package_quantity} pacote(s)
+                                </small>
+                              )}
                             </div>
                           )}
                         </div>
@@ -618,7 +781,7 @@ export default function CatalogosAdminPage() {
               <div className="summary-stats">
                 <div>
                   <strong>{selectedProducts.length}</strong>
-                  <span>Produtos</span>
+                  <span>Produtos selecionados</span>
                 </div>
                 <div>
                   <strong>{categories.length}</strong>
@@ -628,16 +791,12 @@ export default function CatalogosAdminPage() {
 
               {selectedProducts.length > 0 && (
                 <div className="price-summary">
-                  <span>Total pelos preços deste catálogo</span>
-                  <strong>
-                    {formatPrice(
-                      selectedProducts.reduce((total, productId) => {
-                        const product = products.find((item) => item.id === productId);
-                        return product ? total + Number(getCatalogPrice(product) || 0) : total;
-                      }, 0)
-                    )}
-                  </strong>
-                  <small>Os preços personalizados ficam salvos somente neste catálogo.</small>
+                  <span>Estrutura comercial</span>
+                  <strong>{selectedProducts.length} produto(s)</strong>
+                  <small>
+                    Cada produto pode exibir preço unitário, de pacote e/ou caixa master.
+                    Os preços personalizados ficam salvos somente neste catálogo.
+                  </small>
                 </div>
               )}
 
@@ -1077,7 +1236,7 @@ export default function CatalogosAdminPage() {
 
         .toolbar {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) auto auto;
+          grid-template-columns: minmax(0, 1fr) auto auto auto;
           gap: 8px;
         }
 
@@ -1091,6 +1250,12 @@ export default function CatalogosAdminPage() {
           font-size: 9px;
           font-weight: 900;
           cursor: pointer;
+        }
+
+        .toolbar button.secondary {
+          border-color: #e8b88f;
+          background: #fff7f0;
+          color: #9a3a1f;
         }
 
         .toolbar button.ghost {
@@ -1229,23 +1394,187 @@ export default function CatalogosAdminPage() {
         }
 
 
-        .default-price { margin-top: 6px; padding-top: 7px; border-top: 1px solid #f0e9e4; display:flex; justify-content:space-between; gap:8px; align-items:center; }
-        .default-price small { color:#9a8f88; font-size:8px; }
-        .default-price b { color:#8a2a18; font-size:10px; }
-        .catalog-price-box { margin-top:9px; padding:9px; border:1px solid #f0c6a7; border-radius:9px; background:#fff8f2; cursor:default; }
-        .catalog-price-box label { display:flex; flex-direction:column; gap:5px; }
-        .catalog-price-box label > span { color:#8a2a18; font-size:8px; font-weight:900; }
-        .price-input-wrap { display:grid; grid-template-columns:auto 1fr; align-items:center; overflow:hidden; border:1px solid #e5c5ae; border-radius:8px; background:#fff; }
-        .price-input-wrap > span { padding-left:9px; color:#8a2a18; font-size:9px; font-weight:900; }
-        .price-input-wrap input { min-width:0; border:0; box-shadow:none; padding:8px 9px 8px 5px; font-size:10px; font-weight:800; }
-        .price-input-wrap input:focus { border:0; box-shadow:none; }
-        .catalog-price-footer { margin-top:7px; display:flex; align-items:center; justify-content:space-between; gap:6px; }
-        .catalog-price-footer small { color:#6f625b; font-size:7px; font-weight:800; }
-        .catalog-price-footer button { border:0; background:transparent; color:#ef7a00; padding:0; font-size:7px; font-weight:900; cursor:pointer; }
-        .price-summary { margin:-7px 0 16px; padding:11px; border:1px solid #f0c6a7; border-radius:10px; background:#fff8f2; display:flex; flex-direction:column; gap:4px; }
-        .price-summary span { color:#766860; font-size:8px; font-weight:800; }
-        .price-summary strong { color:#8a2a18; font-size:19px; }
-        .price-summary small { color:#9a8f88; font-size:7px; line-height:1.4; }
+        .group-chip {
+          margin-top: 5px;
+          width: fit-content;
+          max-width: 100%;
+          padding: 4px 7px;
+          border-radius: 999px;
+          background: #fff3e8;
+          color: #9a3a1f;
+          font-size: 7px;
+          font-weight: 900;
+          line-height: 1.25;
+        }
+
+        .default-prices {
+          margin-top: 6px;
+          padding-top: 7px;
+          border-top: 1px solid #f0e9e4;
+          display: grid;
+          gap: 4px;
+        }
+
+        .default-prices > div {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .default-prices small {
+          color: #9a8f88;
+          font-size: 7px;
+        }
+
+        .default-prices b {
+          color: #8a2a18;
+          font-size: 8px;
+          text-align: right;
+        }
+
+        .catalog-price-box {
+          margin-top: 9px;
+          padding: 9px;
+          border: 1px solid #f0c6a7;
+          border-radius: 9px;
+          background: #fff8f2;
+          cursor: default;
+          display: flex;
+          flex-direction: column;
+          gap: 9px;
+        }
+
+        .price-level-row {
+          padding-bottom: 9px;
+          border-bottom: 1px solid #f0ded1;
+        }
+
+        .price-level-row:last-of-type {
+          padding-bottom: 0;
+          border-bottom: 0;
+        }
+
+        .catalog-price-box label {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+        }
+
+        .catalog-price-box label > span {
+          color: #8a2a18;
+          font-size: 8px;
+          font-weight: 900;
+        }
+
+        .price-visible-toggle {
+          margin-bottom: 6px;
+          flex-direction: row !important;
+          align-items: center;
+          gap: 6px !important;
+          cursor: pointer;
+        }
+
+        .price-visible-toggle input {
+          width: 14px;
+          height: 14px;
+          padding: 0;
+          accent-color: #ef7a00;
+        }
+
+        .price-visible-toggle span {
+          color: #5f514a !important;
+          font-size: 7px !important;
+        }
+
+        .price-input-wrap {
+          display: grid;
+          grid-template-columns: auto 1fr;
+          align-items: center;
+          overflow: hidden;
+          border: 1px solid #e5c5ae;
+          border-radius: 8px;
+          background: #fff;
+        }
+
+        .price-input-wrap > span {
+          padding-left: 9px;
+          color: #8a2a18;
+          font-size: 9px;
+          font-weight: 900;
+        }
+
+        .price-input-wrap input {
+          min-width: 0;
+          border: 0;
+          box-shadow: none;
+          padding: 8px 9px 8px 5px;
+          font-size: 10px;
+          font-weight: 800;
+        }
+
+        .price-input-wrap input:focus {
+          border: 0;
+          box-shadow: none;
+        }
+
+        .catalog-price-footer {
+          margin-top: 7px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 6px;
+        }
+
+        .catalog-price-footer small {
+          color: #6f625b;
+          font-size: 7px;
+          font-weight: 800;
+        }
+
+        .catalog-price-footer button {
+          border: 0;
+          background: transparent;
+          color: #ef7a00;
+          padding: 0;
+          font-size: 7px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .master-note {
+          color: #8b7c74;
+          font-size: 7px;
+          line-height: 1.4;
+        }
+
+        .price-summary {
+          margin: -7px 0 16px;
+          padding: 11px;
+          border: 1px solid #f0c6a7;
+          border-radius: 10px;
+          background: #fff8f2;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .price-summary span {
+          color: #766860;
+          font-size: 8px;
+          font-weight: 800;
+        }
+
+        .price-summary strong {
+          color: #8a2a18;
+          font-size: 19px;
+        }
+
+        .price-summary small {
+          color: #9a8f88;
+          font-size: 7px;
+          line-height: 1.4;
+        }
 
         .right-column {
           position: sticky;

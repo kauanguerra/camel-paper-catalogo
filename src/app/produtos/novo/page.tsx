@@ -11,6 +11,13 @@ type Category = {
   name: string;
 };
 
+type CatalogGroup = {
+  id: string;
+  name: string;
+  slug: string;
+  position: number;
+};
+
 type PhotoSlotKey = "front" | "back" | "product" | "detail";
 
 type PhotoSlot = {
@@ -52,6 +59,7 @@ export default function NovoProdutoPage() {
   const router = useRouter();
 
   const [categories, setCategories] = useState<Category[]>([]);
+  const [catalogGroups, setCatalogGroups] = useState<CatalogGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [hasVariants, setHasVariants] = useState(false);
@@ -105,31 +113,113 @@ export default function NovoProdutoPage() {
     material: "",
     package_quantity: "1",
     package_unit: "UNIDADE",
+    catalog_group_id: "",
+    unit_price: "",
+    package_price: "",
+    master_package_quantity: "",
+    master_price: "",
   });
 
   useEffect(() => {
-    async function loadCategories() {
-      const { data, error } = await supabase
-        .from("categories")
-        .select("id, name")
-        .eq("active", true)
-        .order("name");
+    async function loadReferenceData() {
+      const [categoriesResult, groupsResult] = await Promise.all([
+        supabase
+          .from("categories")
+          .select("id, name")
+          .eq("active", true)
+          .order("name"),
+        supabase
+          .from("catalog_groups")
+          .select("id, name, slug, position")
+          .eq("active", true)
+          .order("position")
+          .order("name"),
+      ]);
 
-      if (error) {
-        console.error("Erro ao carregar categorias:", error);
-        return;
+      if (categoriesResult.error) {
+        console.error("Erro ao carregar categorias:", categoriesResult.error);
+      } else {
+        setCategories(categoriesResult.data || []);
       }
 
-      setCategories(data || []);
+      if (groupsResult.error) {
+        console.error("Erro ao carregar grupos comerciais:", groupsResult.error);
+      } else {
+        setCatalogGroups(groupsResult.data || []);
+      }
     }
 
-    loadCategories();
+    loadReferenceData();
   }, []);
 
   const selectedPhotosCount = useMemo(
     () => photos.filter((photo) => photo.file).length,
     [photos]
   );
+
+  function normalizeText(value: string) {
+    return value
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  }
+
+  function findSuggestedGroupId(productName: string, categoryId: string) {
+    if (!catalogGroups.length) return "";
+
+    const categoryName =
+      categories.find((category) => category.id === categoryId)?.name || "";
+    const text = normalizeText(`${productName} ${categoryName}`);
+
+    const rules: Array<{ slugs: string[]; terms: string[] }> = [
+      { slugs: ["grampeadores-e-perfuradores"], terms: ["grampeador", "perfurador"] },
+      { slugs: ["grampos-clipes-e-prendedores"], terms: ["grampo", "clips", "clipe", "binder", "prendedor"] },
+      { slugs: ["calculadoras"], terms: ["calculadora"] },
+      { slugs: ["pranchetas"], terms: ["prancheta"] },
+      { slugs: ["quadros-e-apresentacao"], terms: ["quadro branco", "quadro negro", "apagador de quadro", "flip chart"] },
+      { slugs: ["etiquetas-e-identificacao"], terms: ["etiqueta", "identificador", "cracha"] },
+      { slugs: ["fitas-adesivas-e-suportes"], terms: ["fita adesiva", "durex", "porta fita", "suporte para fita"] },
+      { slugs: ["tesouras-e-estiletes"], terms: ["tesoura", "estilete", "lamina para estilete"] },
+      { slugs: ["reguas-e-instrumentos-de-medicao"], terms: ["regua", "esquadro", "transferidor", "compasso"] },
+      { slugs: ["corretivos"], terms: ["corretivo", "fita corretiva"] },
+      { slugs: ["colas-e-adesivos"], terms: ["cola", "adesivo"] },
+      { slugs: ["apontadores-e-borrachas"], terms: ["apontador", "borracha"] },
+      { slugs: ["marcadores-e-marca-textos"], terms: ["marcador", "marca-texto", "marca texto", "caneta permanente", "quadro branco"] },
+      { slugs: ["lapis-lapiseiras-e-grafites"], terms: ["lapiseira", "grafite", "lapis preto", "lapis hb", "lapis 2b"] },
+      { slugs: ["canetas"], terms: ["caneta", "esferografica"] },
+      { slugs: ["cadernos-e-cadernetas"], terms: ["caderno", "caderneta", "planner"] },
+      { slugs: ["blocos-e-notas-adesivas"], terms: ["bloco", "nota adesiva", "post-it", "post it"] },
+      { slugs: ["pastas-arquivos-e-organizacao"], terms: ["pasta", "arquivo", "classificador", "organizador"] },
+      { slugs: ["papeis"], terms: ["papel", "cartolina", "sulfite"] },
+      { slugs: ["massas-e-modelagem"], terms: ["massa de modelar", "massinha", "modelagem"] },
+      { slugs: ["desenho-e-colorir"], terms: ["giz de cera", "lapis de cor", "canetinha", "colorir"] },
+      { slugs: ["artes-e-pintura"], terms: ["tinta", "pincel", "aquarela", "pintura"] },
+      { slugs: ["estojos-e-acessorios-escolares"], terms: ["estojo", "kit escolar"] },
+      { slugs: ["acessorios-de-escritorio"], terms: ["chaveiro", "chaveiros"] },
+    ];
+
+    for (const rule of rules) {
+      if (rule.terms.some((term) => text.includes(normalizeText(term)))) {
+        const group = catalogGroups.find((item) => rule.slugs.includes(item.slug));
+        if (group) return group.id;
+      }
+    }
+
+    const categoryFallbacks: Record<string, string> = {
+      apontadores: "apontadores-e-borrachas",
+      borrachas: "apontadores-e-borrachas",
+      blocos: "blocos-e-notas-adesivas",
+      cadernos: "cadernos-e-cadernetas",
+      colas: "colas-e-adesivos",
+      marcadores: "marcadores-e-marca-textos",
+      reguas: "reguas-e-instrumentos-de-medicao",
+      tesouras: "tesouras-e-estiletes",
+    };
+
+    const categoryKey = normalizeText(categoryName).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const fallbackSlug = categoryFallbacks[categoryKey];
+    return catalogGroups.find((item) => item.slug === fallbackSlug)?.id || "";
+  }
 
   function handleChange(
     e: React.ChangeEvent<
@@ -138,10 +228,20 @@ export default function NovoProdutoPage() {
   ) {
     const { name, value } = e.target;
 
-    setForm((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setForm((prev) => {
+      const next = {
+        ...prev,
+        [name]: value,
+      };
+
+      if ((name === "name" || name === "category_id") && !prev.catalog_group_id) {
+        const nextName = name === "name" ? value : prev.name;
+        const nextCategoryId = name === "category_id" ? value : prev.category_id;
+        next.catalog_group_id = findSuggestedGroupId(nextName, nextCategoryId);
+      }
+
+      return next;
+    });
   }
 
   function handlePhotoChange(
@@ -369,6 +469,12 @@ export default function NovoProdutoPage() {
           material: form.material.trim() || null,
           package_quantity: Number(form.package_quantity) || 1,
           package_unit: form.package_unit || "UNIDADE",
+          catalog_group_id: form.catalog_group_id || null,
+          unit_price: form.unit_price ? Number(form.unit_price) : null,
+          package_price: form.package_price ? Number(form.package_price) : null,
+          master_package_quantity: form.master_package_quantity ? Number(form.master_package_quantity) : null,
+          master_price: form.master_price ? Number(form.master_price) : null,
+          sale_price: form.package_price ? Number(form.package_price) : null,
           active: true,
           has_variants: hasVariants,
         })
@@ -511,6 +617,24 @@ export default function NovoProdutoPage() {
                     </option>
                   ))}
                 </select>
+              </Field>
+
+              <Field label="Grupo no catálogo">
+                <select
+                  name="catalog_group_id"
+                  value={form.catalog_group_id}
+                  onChange={handleChange}
+                >
+                  <option value="">Sem grupo comercial</option>
+                  {catalogGroups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
+                <small className="field-helper">
+                  Sugerido automaticamente pelo nome e categoria. Você pode alterar manualmente.
+                </small>
               </Field>
 
               <Field label="Código interno">
@@ -752,6 +876,45 @@ export default function NovoProdutoPage() {
                   <option value="KIT">Kit</option>
                 </select>
               </Field>
+            </div>
+          </section>
+
+          <section className="form-section">
+            <div className="section-heading">
+              <div>
+                <h2>Preços e caixa master</h2>
+                <p>Estrutura comercial para unidade, embalagem e caixa master.</p>
+              </div>
+            </div>
+
+            <div className="pricing-grid">
+              <div className="pricing-card">
+                <span>UNIDADE</span>
+                <strong>Preço unitário</strong>
+                <input type="number" step="0.01" min="0" name="unit_price" value={form.unit_price} onChange={handleChange} placeholder="0,00" />
+                <small>Preço comercial de uma unidade.</small>
+              </div>
+
+              <div className="pricing-card featured">
+                <span>PACOTE / EMBALAGEM</span>
+                <strong>Preço do pacote</strong>
+                <input type="number" step="0.01" min="0" name="package_price" value={form.package_price} onChange={handleChange} placeholder="0,00" />
+                <small>{form.package_quantity || "1"} {form.package_unit || "UNIDADE"} por embalagem.</small>
+              </div>
+
+              <div className="pricing-card">
+                <span>CAIXA MASTER</span>
+                <strong>Configuração master</strong>
+                <div className="master-inputs">
+                  <input type="number" min="1" name="master_package_quantity" value={form.master_package_quantity} onChange={handleChange} placeholder="Qtd. pacotes" />
+                  <input type="number" step="0.01" min="0" name="master_price" value={form.master_price} onChange={handleChange} placeholder="Preço R$" />
+                </div>
+                <small>
+                  {form.master_package_quantity
+                    ? `${Number(form.master_package_quantity) * (Number(form.package_quantity) || 1)} unidades no total`
+                    : "Opcional. Informe quantos pacotes formam a master."}
+                </small>
+              </div>
             </div>
           </section>
 
@@ -1182,10 +1345,73 @@ export default function NovoProdutoPage() {
           transform: none;
         }
 
+        .field-helper {
+          display: block;
+          margin-top: 7px;
+          color: #8a807a;
+          font-size: 11px;
+          line-height: 1.4;
+        }
+
+        .pricing-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .pricing-card {
+          border: 1px solid #e8dfd9;
+          border-radius: 15px;
+          padding: 18px;
+          background: #fcfaf8;
+          transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+        }
+
+        .pricing-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 10px 24px rgba(76, 50, 38, .06);
+        }
+
+        .pricing-card.featured {
+          border-color: #f0c7a7;
+          background: #fff9f3;
+        }
+
+        .pricing-card > span {
+          display: block;
+          color: #ef7a00;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: 1px;
+          margin-bottom: 6px;
+        }
+
+        .pricing-card > strong {
+          display: block;
+          color: #35251f;
+          font-size: 14px;
+          margin-bottom: 12px;
+        }
+
+        .pricing-card > small {
+          display: block;
+          margin-top: 9px;
+          color: #887d77;
+          font-size: 11px;
+          line-height: 1.4;
+        }
+
+        .master-inputs {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+
         @media (max-width: 920px) {
           .form-grid-four,
           .photo-grid,
-          .variant-grid {
+          .variant-grid,
+          .pricing-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
@@ -1203,7 +1429,8 @@ export default function NovoProdutoPage() {
           .form-grid,
           .form-grid-four,
           .photo-grid,
-          .variant-grid {
+          .variant-grid,
+          .pricing-grid {
             grid-template-columns: 1fr;
           }
 

@@ -38,6 +38,11 @@ type Product = {
   package_quantity: number | null;
   package_unit: string | null;
   sale_price: number | null;
+  catalog_group_id: string | null;
+  unit_price: number | null;
+  package_price: number | null;
+  master_package_quantity: number | null;
+  master_price: number | null;
   commercial_visibility: Record<string, boolean> | null;
   commercial_variants: string | null;
   commercial_highlights: string | null;
@@ -46,7 +51,29 @@ type Product = {
 type CatalogProduct = {
   position: number;
   custom_price: number | null;
+  custom_unit_price: number | null;
+  custom_package_price: number | null;
+  custom_master_price: number | null;
+  show_unit_price: boolean;
+  show_package_price: boolean;
+  show_master_price: boolean;
   products: Product | Product[] | null;
+};
+
+type CatalogGroup = {
+  id: string;
+  name: string;
+  position: number;
+};
+
+type CatalogProductView = Product & {
+  catalog_position: number;
+  catalog_custom_unit_price: number | null;
+  catalog_custom_package_price: number | null;
+  catalog_custom_master_price: number | null;
+  catalog_show_unit_price: boolean;
+  catalog_show_package_price: boolean;
+  catalog_show_master_price: boolean;
 };
 
 type ProductImage = {
@@ -105,7 +132,8 @@ export default function CatalogPreviewPage() {
   const catalogId = params.id;
 
   const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<CatalogProductView[]>([]);
+  const [catalogGroups, setCatalogGroups] = useState<CatalogGroup[]>([]);
   const [images, setImages] = useState<ProductImage[]>([]);
   const [variants, setVariants] = useState<ProductVariant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -124,7 +152,7 @@ export default function CatalogPreviewPage() {
     async function loadCatalog() {
       setLoading(true);
 
-      const [catalogResult, itemsResult] = await Promise.all([
+      const [catalogResult, itemsResult, groupsResult] = await Promise.all([
         supabase
           .from("catalogs")
           .select(
@@ -139,6 +167,12 @@ export default function CatalogPreviewPage() {
             `
             position,
             custom_price,
+            custom_unit_price,
+            custom_package_price,
+            custom_master_price,
+            show_unit_price,
+            show_package_price,
+            show_master_price,
             products (
               id,
               name,
@@ -154,6 +188,11 @@ export default function CatalogPreviewPage() {
               package_quantity,
               package_unit,
               sale_price,
+              catalog_group_id,
+              unit_price,
+              package_price,
+              master_package_quantity,
+              master_price,
               commercial_visibility,
               commercial_variants,
               commercial_highlights
@@ -162,6 +201,13 @@ export default function CatalogPreviewPage() {
           )
           .eq("catalog_id", catalogId)
           .order("position"),
+
+        supabase
+          .from("catalog_groups")
+          .select("id, name, position")
+          .eq("active", true)
+          .order("position")
+          .order("name"),
       ]);
 
       if (!catalogResult.error && catalogResult.data) {
@@ -178,17 +224,23 @@ export default function CatalogPreviewPage() {
 
           return {
             ...product,
-            // Neste catálogo, custom_price tem prioridade.
-            // Se não houver preço personalizado, usa o preço padrão do produto.
-            sale_price:
-              item.custom_price !== null && item.custom_price !== undefined
-                ? Number(item.custom_price)
-                : product.sale_price,
+            catalog_position: item.position,
+            catalog_custom_unit_price: item.custom_unit_price,
+            catalog_custom_package_price:
+              item.custom_package_price ?? item.custom_price,
+            catalog_custom_master_price: item.custom_master_price,
+            catalog_show_unit_price: item.show_unit_price ?? false,
+            catalog_show_package_price: item.show_package_price ?? true,
+            catalog_show_master_price: item.show_master_price ?? false,
           };
         })
-        .filter((product): product is Product => Boolean(product));
+        .filter((product): product is CatalogProductView => Boolean(product));
 
       setProducts(normalizedProducts);
+
+      if (!groupsResult.error) {
+        setCatalogGroups((groupsResult.data || []) as CatalogGroup[]);
+      }
 
       if (normalizedProducts.length > 0) {
         const productIds = normalizedProducts.map((product) => product.id);
@@ -454,6 +506,94 @@ export default function CatalogPreviewPage() {
       currency: "BRL",
     }).format(Number(value || 0));
   }
+
+  function getCatalogGroup(product: CatalogProductView) {
+    return catalogGroups.find((group) => group.id === product.catalog_group_id) || null;
+  }
+
+  function getCommercialPrice(
+    product: CatalogProductView,
+    level: "unit" | "package" | "master"
+  ) {
+    if (level === "unit") {
+      return product.catalog_custom_unit_price ?? product.unit_price;
+    }
+
+    if (level === "master") {
+      return product.catalog_custom_master_price ?? product.master_price;
+    }
+
+    return (
+      product.catalog_custom_package_price ??
+      product.package_price ??
+      product.sale_price
+    );
+  }
+
+  function getVisibleCommercialPrices(product: CatalogProductView) {
+    return [
+      product.catalog_show_unit_price
+        ? { key: "unit", label: "UNIDADE", value: getCommercialPrice(product, "unit") }
+        : null,
+      product.catalog_show_package_price
+        ? { key: "package", label: "PACOTE", value: getCommercialPrice(product, "package") }
+        : null,
+      product.catalog_show_master_price
+        ? { key: "master", label: "CAIXA MASTER", value: getCommercialPrice(product, "master") }
+        : null,
+    ].filter(
+      (item): item is { key: string; label: string; value: number | null } =>
+        Boolean(item && item.value !== null && item.value !== undefined)
+    );
+  }
+
+  const groupedCatalogProducts = catalogGroups
+    .map((group) => ({
+      group,
+      products: products
+        .filter((product) => product.catalog_group_id === group.id)
+        .sort((a, b) => a.catalog_position - b.catalog_position),
+    }))
+    .filter((entry) => entry.products.length > 0);
+
+  const ungroupedProducts = products
+    .filter(
+      (product) =>
+        !product.catalog_group_id ||
+        !catalogGroups.some((group) => group.id === product.catalog_group_id)
+    )
+    .sort((a, b) => a.catalog_position - b.catalog_position);
+
+  const catalogSections = [
+    ...groupedCatalogProducts,
+    ...(ungroupedProducts.length
+      ? [{
+          group: { id: "ungrouped", name: "Outros", position: 999999 },
+          products: ungroupedProducts,
+        }]
+      : []),
+  ];
+
+  const catalogSectionsWithPages = catalogSections.reduce<
+    Array<{
+      group: CatalogGroup;
+      products: CatalogProductView[];
+      startPage: number;
+      endPage: number;
+    }>
+  >((acc, section) => {
+    const previous = acc[acc.length - 1];
+    const startPage = previous ? previous.endPage + 1 : 3;
+    const endPage = startPage + section.products.length - 1;
+
+    acc.push({
+      ...section,
+      startPage,
+      endPage,
+    });
+
+    return acc;
+  }, []);
 
   function responseProduct(
     item: CatalogResponseItem
@@ -953,59 +1093,93 @@ export default function CatalogPreviewPage() {
 
       <section className="catalog-document">
         <section className="cover-page print-page">
-          <div className="cover-brand">
+          <svg
+            className="cover-print-bg"
+            viewBox="0 0 210 297"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <defs>
+              <linearGradient id="camelCoverGradient" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#8f2517" />
+                <stop offset="48%" stopColor="#a8321e" />
+                <stop offset="100%" stopColor="#7a1e14" />
+              </linearGradient>
+              <radialGradient id="camelCoverGlow" cx="82%" cy="22%" r="38%">
+                <stop offset="0%" stopColor="#ffffff" stopOpacity="0.14" />
+                <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+              </radialGradient>
+              <pattern id="camelCoverGrid" width="9.5" height="9.5" patternUnits="userSpaceOnUse">
+                <path
+                  d="M 9.5 0 L 0 0 0 9.5"
+                  fill="none"
+                  stroke="#ffffff"
+                  strokeOpacity="0.026"
+                  strokeWidth="0.22"
+                />
+              </pattern>
+            </defs>
+
+            <rect width="210" height="297" fill="url(#camelCoverGradient)" />
+            <rect width="210" height="297" fill="url(#camelCoverGlow)" />
+            <rect width="210" height="297" fill="url(#camelCoverGrid)" />
+          </svg>
+
+          <div className="cover-topbar">
             <Image
               className="cover-logo-screen"
               src="/brand/camel-branco.svg"
               alt="Camel Paper"
-              width={330}
-              height={130}
+              width={240}
+              height={94}
               priority
             />
-            <Image
-              className="cover-logo-print"
-              src="/brand/camel-colorido.svg"
-              alt="Camel Paper"
-              width={330}
-              height={130}
-              priority
-            />
+            <span className="cover-edition">CATÁLOGO COMERCIAL 2026</span>
           </div>
 
-          <Image
-            className="cover-camel-mark"
-            src="/brand/camelo-marrom.svg"
-            alt=""
-            aria-hidden="true"
-            width={900}
-            height={650}
-          />
+          <div className="cover-hero">
+            <div className="cover-copy">
+              <span className="cover-kicker">LINHA COMPLETA CAMEL PAPER</span>
+              <h1>{catalog.cover_title || "Catálogo de Produtos"}</h1>
+              <p>{catalog.cover_subtitle || "Soluções para papelaria, escritório e varejo."}</p>
 
-          <div className="cover-copy">
-            <span>CATÁLOGO COMERCIAL</span>
-            <h1>{catalog.cover_title || "Catálogo de Produtos"}</h1>
-            <p>{catalog.cover_subtitle || "Camel Paper"}</p>
+              <div className="cover-rule" />
 
-            {(catalog.client_company || catalog.client_name) && (
-              <div className="cover-client">
-                <span>PREPARADO PARA</span>
-                <strong>{catalog.client_company || catalog.client_name}</strong>
-                {catalog.client_company && catalog.client_name && (
-                  <small>A/C {catalog.client_name}</small>
-                )}
-                {catalog.valid_until && (
-                  <small>
-                    Condições válidas até{" "}
-                    {new Date(`${catalog.valid_until}T12:00:00`).toLocaleDateString("pt-BR")}
-                  </small>
-                )}
+              <div className="cover-stats">
+                <div>
+                  <strong>{products.length}</strong>
+                  <span>produtos</span>
+                </div>
+                <div>
+                  <strong>{catalogSectionsWithPages.length}</strong>
+                  <span>grupos comerciais</span>
+                </div>
               </div>
-            )}
+
+              {(catalog.client_company || catalog.client_name || catalog.valid_until) && (
+                <div className="cover-client">
+                  <span>PREPARADO PARA</span>
+                  <strong>{catalog.client_company || catalog.client_name || "Cliente"}</strong>
+                  {catalog.client_company && catalog.client_name && (
+                    <small>A/C {catalog.client_name}</small>
+                  )}
+                  {catalog.valid_until && (
+                    <small>
+                      Condições válidas até{" "}
+                      {new Date(`${catalog.valid_until}T12:00:00`).toLocaleDateString("pt-BR")}
+                    </small>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="cover-footer">
-            <span>{products.length} produtos selecionados</span>
-            <strong>Camel Paper</strong>
+            <div>
+              <span>CAMEL PAPER</span>
+              <small>Papelaria • Escolar • Escritório</small>
+            </div>
+            <strong>camelpaper.com.br</strong>
           </div>
         </section>
 
@@ -1023,20 +1197,35 @@ export default function CatalogPreviewPage() {
             <span className="section-eyebrow">CONTEÚDO</span>
             <h2>Conteúdo do catálogo</h2>
 
-            <div className="index-list">
-              {products.map((product, index) => (
-                <div key={product.id}>
-                  <span>{String(index + 1).padStart(2, "0")}</span>
-                  <strong>{product.name}</strong>
-                  <small>{product.sku || "SKU não informado"}</small>
+            <div className="index-list group-index-list">
+              {catalogSectionsWithPages.map((section, sectionIndex) => (
+                <div className="group-index-row" key={section.group.id}>
+                  <span className="group-index-number">
+                    {String(sectionIndex + 1).padStart(2, "0")}
+                  </span>
+
+                  <div className="group-index-copy">
+                    <strong>{section.group.name}</strong>
+                    <small>
+                      {section.products.length} produto(s) · páginas {section.startPage}
+                      {section.endPage !== section.startPage ? `–${section.endPage}` : ""}
+                    </small>
+                  </div>
+
+                  <div className="group-index-page">
+                    <span className="group-index-dots" aria-hidden="true" />
+                    <b>{section.startPage}</b>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
         </section>
 
-        {products.map((product, index) => {
+        {catalogSectionsWithPages.flatMap((section) => section.products).map((product, index) => {
           const front = getImage(product.id, "front");
+          const catalogGroup = getCatalogGroup(product);
+          const commercialPrices = getVisibleCommercialPrices(product);
           const catalogImages = getCatalogImages(product.id);
           const secondaryImages = catalogImages.filter(
             ({ image }) => image.id !== front?.id
@@ -1117,18 +1306,19 @@ export default function CatalogPreviewPage() {
                 </div>
 
                 <div className="product-info">
-                  <span className="section-eyebrow">PRODUTO CAMEL PAPER</span>
+                  <span className="section-eyebrow">
+                    {catalogGroup?.name || "PRODUTO CAMEL PAPER"}
+                  </span>
                   <h2>{product.name}</h2>
 
-                  {visibility.price && product.sale_price !== null && (
-                    <div className="catalog-price">
-                      <span>PREÇO DE VENDA</span>
-                      <strong>
-                        {new Intl.NumberFormat("pt-BR", {
-                          style: "currency",
-                          currency: "BRL",
-                        }).format(Number(product.sale_price))}
-                      </strong>
+                  {visibility.price && commercialPrices.length > 0 && (
+                    <div className={`catalog-prices ${commercialPrices.length === 1 ? "single" : ""}`}>
+                      {commercialPrices.map((price) => (
+                        <div className="catalog-price" key={price.key}>
+                          <span>{price.label}</span>
+                          <strong>{formatMoney(price.value)}</strong>
+                        </div>
+                      ))}
                     </div>
                   )}
 
@@ -1186,7 +1376,7 @@ export default function CatalogPreviewPage() {
                       <div className="catalog-variants-grid">
                         {productVariants.map((variant) => {
                           const variantImage = getVariantImage(product.id, variant.id);
-                          const variantPrice = variant.sale_price ?? product.sale_price;
+                          const variantPrice = variant.sale_price ?? getCommercialPrice(product, "package");
 
                           return (
                             <div className="catalog-variant-card" key={variant.id}>
@@ -1890,128 +2080,205 @@ export default function CatalogPreviewPage() {
         .cover-page {
           position: relative;
           overflow: hidden;
-          padding: 28mm 24mm 22mm;
           background:
-            linear-gradient(
-              135deg,
-              rgba(119, 30, 15, 0.98),
-              rgba(151, 48, 22, 0.97)
-            );
+            radial-gradient(circle at 82% 22%, rgba(255,255,255,.13), transparent 26%),
+            linear-gradient(145deg, #8f2517 0%, #a8321e 48%, #7a1e14 100%);
           color: #fff;
+          padding: 66px 74px 58px;
+          box-sizing: border-box;
           display: flex;
           flex-direction: column;
+          justify-content: space-between;
         }
 
-        .cover-page::after {
+        .cover-print-bg {
+          display: none;
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          z-index: 0;
+          pointer-events: none;
+        }
+
+        .cover-page::before {
           content: "";
           position: absolute;
           inset: 0;
-          background: linear-gradient(115deg, transparent 42%, rgba(239, 122, 0, 0.055));
           pointer-events: none;
+          background:
+            linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+          background-size: 38px 38px;
+          mask-image: linear-gradient(to bottom, rgba(0,0,0,.6), transparent 78%);
         }
 
-        .cover-camel-mark {
-          position: absolute;
-          width: 185mm;
+        .cover-topbar {
+          position: relative;
+          z-index: 2;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 20px;
+        }
+
+        .cover-logo-screen {
+          display: block;
+          width: 180px;
           height: auto;
-          right: -56mm;
-          bottom: -12mm;
-          opacity: .18;
-          transform: rotate(-4deg);
-          filter: brightness(1.55) saturate(.75);
-          pointer-events: none;
-          user-select: none;
-          z-index: 1;
         }
 
-        .cover-brand {
-          width: 90mm;
-          height: 34mm;
+        .cover-edition {
+          padding: 8px 11px;
+          border: 1px solid rgba(255,255,255,.26);
+          border-radius: 999px;
+          background: rgba(255,255,255,.08);
+          color: rgba(255,255,255,.86);
+          font-size: 8px;
+          font-weight: 900;
+          letter-spacing: 1.3px;
         }
 
-        .cover-brand :global(img) {
-          width: 90mm;
-          height: 34mm;
-          object-fit: contain;
-          object-position: left center;
-        }
-
-        .cover-logo-print {
-          display: none;
+        .cover-hero {
+          position: relative;
+          z-index: 2;
+          display: flex;
+          align-items: center;
+          flex: 1;
         }
 
         .cover-copy {
-          margin-top: 62mm;
-          max-width: 145mm;
-          position: relative;
-          z-index: 2;
+          max-width: 520px;
         }
 
-        .cover-copy span,
-        .section-eyebrow {
-          color: #f6a85d;
+        .cover-kicker {
+          display: inline-block;
+          margin-bottom: 18px;
+          color: #ffb06b;
           font-size: 9px;
           font-weight: 900;
           letter-spacing: 2px;
         }
 
         .cover-copy h1 {
-          margin: 7mm 0 0;
-          font-size: 26mm;
-          line-height: 0.93;
-          letter-spacing: -2.6mm;
+          margin: 0;
+          max-width: 500px;
+          color: #fff;
+          font-size: 58px;
+          line-height: .98;
+          letter-spacing: -2.6px;
         }
 
-        .cover-copy p {
-          margin: 6mm 0 0;
-          color: rgba(255,255,255,0.74);
-          font-size: 5mm;
+        .cover-copy > p {
+          max-width: 440px;
+          margin: 20px 0 0;
+          color: rgba(255,255,255,.78);
+          font-size: 15px;
+          line-height: 1.5;
+        }
+
+        .cover-rule {
+          width: 68px;
+          height: 4px;
+          margin: 28px 0 22px;
+          border-radius: 999px;
+          background: #ef7a00;
+        }
+
+        .cover-stats {
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+
+        .cover-stats > div {
+          min-width: 120px;
+          padding: 12px 14px;
+          border: 1px solid rgba(255,255,255,.17);
+          border-radius: 12px;
+          background: rgba(255,255,255,.07);
+          backdrop-filter: blur(4px);
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .cover-stats strong {
+          color: #fff;
+          font-size: 22px;
+          line-height: 1;
+        }
+
+        .cover-stats span {
+          color: rgba(255,255,255,.68);
+          font-size: 8px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: .7px;
         }
 
         .cover-client {
-          margin-top: 12mm;
           width: fit-content;
-          max-width: 115mm;
-          padding: 5mm 6mm;
-          border: 0.3mm solid rgba(255,255,255,0.24);
-          border-radius: 4mm;
-          background: rgba(255,255,255,0.08);
+          max-width: 360px;
+          margin-top: 22px;
+          padding: 13px 15px;
+          border-left: 3px solid #ef7a00;
+          background: rgba(0,0,0,.12);
           display: flex;
           flex-direction: column;
-          gap: 1.4mm;
+          gap: 3px;
         }
 
         .cover-client > span {
-          color: #f6a85d;
-          font-size: 2.3mm;
+          color: #ffb06b;
+          font-size: 7px;
           font-weight: 900;
-          letter-spacing: 0.5mm;
+          letter-spacing: 1.2px;
         }
 
         .cover-client strong {
           color: #fff;
-          font-size: 5mm;
+          font-size: 13px;
         }
 
         .cover-client small {
-          color: rgba(255,255,255,0.72);
-          font-size: 2.8mm;
+          color: rgba(255,255,255,.72);
+          font-size: 8px;
         }
 
         .cover-footer {
-          margin-top: auto;
           position: relative;
           z-index: 2;
-          padding-top: 8mm;
-          border-top: 0.3mm solid rgba(255,255,255,0.28);
+          padding-top: 18px;
+          border-top: 1px solid rgba(255,255,255,.16);
           display: flex;
-          align-items: center;
+          align-items: flex-end;
           justify-content: space-between;
-          font-size: 3.3mm;
+          gap: 20px;
+        }
+
+        .cover-footer > div {
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
         }
 
         .cover-footer span {
-          color: rgba(255,255,255,0.64);
+          color: #fff;
+          font-size: 9px;
+          font-weight: 900;
+          letter-spacing: 1.4px;
+        }
+
+        .cover-footer small {
+          color: rgba(255,255,255,.58);
+          font-size: 8px;
+        }
+
+        .cover-footer strong {
+          color: rgba(255,255,255,.76);
+          font-size: 9px;
+          font-weight: 800;
         }
 
         .index-page {
@@ -2066,6 +2333,101 @@ export default function CatalogPreviewPage() {
         .index-list small {
           color: #948982;
           font-size: 2.1mm;
+        }
+
+        .group-index-list {
+          margin-top: 24px;
+          display: flex;
+          flex-direction: column;
+          gap: 0;
+        }
+
+        .group-index-row {
+          width: 100%;
+          min-height: 58px;
+          box-sizing: border-box;
+          display: flex !important;
+          align-items: center;
+          gap: 14px;
+          border-bottom: 1px solid #eee5df;
+        }
+
+        .group-index-number {
+          width: 28px;
+          flex: 0 0 28px;
+          color: #ef7a00;
+          font-size: 9px;
+          font-weight: 900;
+          letter-spacing: .6px;
+        }
+
+        .group-index-copy {
+          width: 250px;
+          flex: 0 0 250px;
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .group-index-copy strong {
+          display: block;
+          color: #362822;
+          font-size: 11px;
+          line-height: 1.25;
+          white-space: normal;
+          overflow-wrap: normal;
+          word-break: normal;
+        }
+
+        .group-index-copy small {
+          display: block;
+          color: #9a8d86;
+          font-size: 7px;
+          line-height: 1.35;
+          white-space: nowrap;
+        }
+
+        .group-index-page {
+          min-width: 0;
+          flex: 1 1 auto;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .group-index-dots {
+          min-width: 30px;
+          height: 1px;
+          flex: 1 1 auto;
+          background-image: radial-gradient(circle, #d9cec8 1px, transparent 1.3px);
+          background-size: 6px 1px;
+          background-repeat: repeat-x;
+          opacity: .9;
+        }
+
+        .group-index-page b {
+          width: 28px;
+          flex: 0 0 28px;
+          color: #8a2a18;
+          font-size: 11px;
+          text-align: right;
+        }
+
+        .catalog-prices {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+          margin: 14px 0;
+        }
+
+        .catalog-prices.single {
+          grid-template-columns: minmax(0, 220px);
+        }
+
+        .catalog-prices .catalog-price {
+          margin: 0;
+          min-width: 0;
         }
 
         .product-page {
@@ -2421,6 +2783,11 @@ export default function CatalogPreviewPage() {
         }
 
         @media print {
+          .cover-page {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+
           @page {
             size: A4;
             margin: 0;
@@ -2465,41 +2832,99 @@ export default function CatalogPreviewPage() {
           .cover-page {
             page-break-before: auto !important;
             break-before: auto !important;
-            background: #fff !important;
-            color: #271d19 !important;
+            background: transparent !important;
+            color: #fff !important;
             border: 0 !important;
+            padding: 17mm 18mm 14mm !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
 
-          .cover-page::after,
-          .cover-camel-mark {
+          .cover-print-bg {
+            display: block !important;
+          }
+
+          .cover-page::before {
             display: none !important;
           }
 
           .cover-logo-screen {
-            display: none !important;
-          }
-
-          .cover-logo-print {
             display: block !important;
+            width: 45mm !important;
+            height: auto !important;
           }
 
-          .cover-copy > span {
-            color: #ef7a00 !important;
+          .cover-edition {
+            color: rgba(255,255,255,.9) !important;
+            border-color: rgba(255,255,255,.34) !important;
+            background: transparent !important;
           }
 
-          .cover-copy h1,
-          .cover-copy p,
-          .cover-client strong,
+          .cover-copy {
+            max-width: 92mm !important;
+          }
+
+          .cover-kicker {
+            color: #ffb06b !important;
+          }
+
+          .cover-copy h1 {
+            color: #fff !important;
+            font-size: 15mm !important;
+            line-height: .98 !important;
+          }
+
+          .cover-copy > p {
+            color: rgba(255,255,255,.8) !important;
+          }
+
+          .cover-rule {
+            background: #ef7a00 !important;
+          }
+
+          .cover-stats > div {
+            background: transparent !important;
+            border-color: rgba(255,255,255,.28) !important;
+          }
+
+          .cover-stats strong {
+            color: #fff !important;
+          }
+
+          .cover-stats span,
           .cover-client small,
-          .cover-footer,
-          .cover-footer strong,
-          .cover-footer span {
-            color: #271d19 !important;
+          .cover-footer small,
+          .cover-footer strong {
+            color: rgba(255,255,255,.72) !important;
           }
 
           .cover-client {
-            background: #fff !important;
-            border: 0.35mm solid #eadfd9 !important;
+            background: rgba(72, 14, 8, .22) !important;
+            border: 0 !important;
+            border-left: 1mm solid #ef7a00 !important;
+          }
+
+          .cover-client > span {
+            color: #ffb06b !important;
+          }
+
+          .cover-client strong,
+          .cover-footer span {
+            color: #fff !important;
+          }
+
+
+
+
+
+
+
+
+
+
+
+          .cover-footer {
+            border-top-color: rgba(255,255,255,.2) !important;
           }
 
           .catalog-document > .print-page:last-child {

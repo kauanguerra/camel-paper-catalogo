@@ -11,6 +11,13 @@ type Category = {
   name: string;
 };
 
+type CatalogGroup = {
+  id: string;
+  name: string;
+  slug: string;
+  position: number;
+};
+
 type PhotoSlotKey = "front" | "back" | "product" | "detail";
 
 type ExistingImage = {
@@ -130,6 +137,7 @@ export default function EditarProdutoPage() {
   const productId = params.id;
 
   const [categories, setCategories] = useState<Category[]>([]);
+  const [catalogGroups, setCatalogGroups] = useState<CatalogGroup[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -195,6 +203,11 @@ export default function EditarProdutoPage() {
     package_quantity: "1",
     package_unit: "UNIDADE",
     sale_price: "",
+    catalog_group_id: "",
+    unit_price: "",
+    package_price: "",
+    master_package_quantity: "",
+    master_price: "",
     commercial_variants: "",
     commercial_highlights: "",
     active: true,
@@ -207,11 +220,18 @@ export default function EditarProdutoPage() {
       setPageLoading(true);
       setLoadError("");
 
-      const [categoriesResult, productResult, imagesResult, variantsResult] = await Promise.all([
+      const [categoriesResult, catalogGroupsResult, productResult, imagesResult, variantsResult] = await Promise.all([
         supabase
           .from("categories")
           .select("id, name")
           .eq("active", true)
+          .order("name"),
+
+        supabase
+          .from("catalog_groups")
+          .select("id, name, slug, position")
+          .eq("active", true)
+          .order("position")
           .order("name"),
 
         supabase
@@ -234,6 +254,11 @@ export default function EditarProdutoPage() {
             package_quantity,
             package_unit,
             sale_price,
+            catalog_group_id,
+            unit_price,
+            package_price,
+            master_package_quantity,
+            master_price,
             commercial_visibility,
             commercial_variants,
             commercial_highlights,
@@ -264,6 +289,12 @@ export default function EditarProdutoPage() {
         setCategories(categoriesResult.data || []);
       }
 
+      if (catalogGroupsResult.error) {
+        console.error("Erro ao carregar grupos de catálogo:", catalogGroupsResult.error);
+      } else {
+        setCatalogGroups((catalogGroupsResult.data || []) as CatalogGroup[]);
+      }
+
       if (productResult.error || !productResult.data) {
         console.error("Erro ao carregar produto:", productResult.error);
         setLoadError("Não foi possível carregar este produto.");
@@ -291,6 +322,25 @@ export default function EditarProdutoPage() {
         sale_price:
           product.sale_price !== null && product.sale_price !== undefined
             ? Number(product.sale_price).toFixed(2)
+            : "",
+        catalog_group_id: product.catalog_group_id || "",
+        unit_price:
+          product.unit_price !== null && product.unit_price !== undefined
+            ? Number(product.unit_price).toFixed(2)
+            : "",
+        package_price:
+          product.package_price !== null && product.package_price !== undefined
+            ? Number(product.package_price).toFixed(2)
+            : product.sale_price !== null && product.sale_price !== undefined
+            ? Number(product.sale_price).toFixed(2)
+            : "",
+        master_package_quantity:
+          product.master_package_quantity !== null && product.master_package_quantity !== undefined
+            ? String(product.master_package_quantity)
+            : "",
+        master_price:
+          product.master_price !== null && product.master_price !== undefined
+            ? Number(product.master_price).toFixed(2)
             : "",
         commercial_variants: product.commercial_variants || "",
         commercial_highlights: product.commercial_highlights || "",
@@ -418,6 +468,73 @@ export default function EditarProdutoPage() {
     [photos]
   );
 
+  function normalizeCatalogSuggestionText(value: string) {
+    return value
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  }
+
+  function findSuggestedCatalogGroupId(productName: string, categoryId: string) {
+    if (!catalogGroups.length) return "";
+
+    const categoryName =
+      categories.find((category) => category.id === categoryId)?.name || "";
+    const text = normalizeCatalogSuggestionText(`${productName} ${categoryName}`);
+
+    const rules: Array<{ slug: string; terms: string[] }> = [
+      { slug: "grampeadores-e-perfuradores", terms: ["grampeador", "perfurador"] },
+      { slug: "grampos-clipes-e-prendedores", terms: ["grampo", "clips", "clipe", "binder", "prendedor"] },
+      { slug: "calculadoras", terms: ["calculadora"] },
+      { slug: "pranchetas", terms: ["prancheta"] },
+      { slug: "quadros-e-apresentacao", terms: ["quadro branco", "quadro negro", "apagador de quadro", "flip chart"] },
+      { slug: "etiquetas-e-identificacao", terms: ["etiqueta", "identificador", "cracha"] },
+      { slug: "fitas-adesivas-e-suportes", terms: ["fita adesiva", "durex", "porta fita", "suporte para fita"] },
+      { slug: "tesouras-e-estiletes", terms: ["tesoura", "estilete", "lamina para estilete"] },
+      { slug: "reguas-e-instrumentos-de-medicao", terms: ["regua", "esquadro", "transferidor", "compasso"] },
+      { slug: "corretivos", terms: ["corretivo", "fita corretiva"] },
+      { slug: "colas-e-adesivos", terms: ["cola", "adesivo"] },
+      { slug: "apontadores-e-borrachas", terms: ["apontador", "borracha"] },
+      { slug: "marcadores-e-marca-textos", terms: ["marcador", "marca-texto", "marca texto", "caneta permanente", "permanente"] },
+      { slug: "lapis-lapiseiras-e-grafites", terms: ["lapiseira", "grafite", "lapis preto", "lapis hb", "lapis 2b"] },
+      { slug: "canetas", terms: ["caneta", "esferografica"] },
+      { slug: "cadernos-e-cadernetas", terms: ["caderno", "caderneta", "planner"] },
+      { slug: "blocos-e-notas-adesivas", terms: ["bloco", "nota adesiva", "post-it", "post it"] },
+      { slug: "pastas-arquivos-e-organizacao", terms: ["pasta", "arquivo", "classificador", "organizador"] },
+      { slug: "papeis", terms: ["papel", "cartolina", "sulfite"] },
+      { slug: "massas-e-modelagem", terms: ["massa de modelar", "massinha", "modelagem"] },
+      { slug: "desenho-e-colorir", terms: ["giz de cera", "lapis de cor", "canetinha", "colorir"] },
+      { slug: "artes-e-pintura", terms: ["tinta", "pincel", "aquarela", "pintura"] },
+      { slug: "estojos-e-acessorios-escolares", terms: ["estojo", "kit escolar"] },
+      { slug: "acessorios-de-escritorio", terms: ["chaveiro", "chaveiros"] },
+    ];
+
+    for (const rule of rules) {
+      if (rule.terms.some((term) => text.includes(normalizeCatalogSuggestionText(term)))) {
+        const group = catalogGroups.find((item) => item.slug === rule.slug);
+        if (group) return group.id;
+      }
+    }
+
+    const categoryFallbacks: Record<string, string> = {
+      apontadores: "apontadores-e-borrachas",
+      borrachas: "apontadores-e-borrachas",
+      blocos: "blocos-e-notas-adesivas",
+      cadernos: "cadernos-e-cadernetas",
+      colas: "colas-e-adesivos",
+      marcadores: "marcadores-e-marca-textos",
+      reguas: "reguas-e-instrumentos-de-medicao",
+      tesouras: "tesouras-e-estiletes",
+    };
+
+    const categoryKey = normalizeCatalogSuggestionText(categoryName)
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+
+    const fallbackSlug = categoryFallbacks[categoryKey];
+    return catalogGroups.find((item) => item.slug === fallbackSlug)?.id || "";
+  }
+
   function handleChange(
     e: React.ChangeEvent<
       HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
@@ -425,10 +542,20 @@ export default function EditarProdutoPage() {
   ) {
     const { name, value } = e.target;
 
-    setForm((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setForm((prev) => {
+      const next = {
+        ...prev,
+        [name]: value,
+      };
+
+      if ((name === "name" || name === "category_id") && !prev.catalog_group_id) {
+        const nextName = name === "name" ? value : prev.name;
+        const nextCategoryId = name === "category_id" ? value : prev.category_id;
+        next.catalog_group_id = findSuggestedCatalogGroupId(nextName, nextCategoryId);
+      }
+
+      return next;
+    });
   }
 
   function toggleCommercialVisibility(key: keyof CommercialVisibility) {
@@ -1324,7 +1451,22 @@ export default function EditarProdutoPage() {
           material: form.material.trim() || null,
           package_quantity: Number(form.package_quantity) || 1,
           package_unit: form.package_unit || "UNIDADE",
-          sale_price: form.sale_price ? Number(form.sale_price) : null,
+          sale_price: form.package_price
+            ? Number(form.package_price)
+            : form.sale_price
+            ? Number(form.sale_price)
+            : null,
+          catalog_group_id: form.catalog_group_id || null,
+          unit_price: form.unit_price ? Number(form.unit_price) : null,
+          package_price: form.package_price
+            ? Number(form.package_price)
+            : form.sale_price
+            ? Number(form.sale_price)
+            : null,
+          master_package_quantity: form.master_package_quantity
+            ? Number(form.master_package_quantity)
+            : null,
+          master_price: form.master_price ? Number(form.master_price) : null,
           commercial_visibility: commercialVisibility,
           commercial_variants: form.commercial_variants.trim() || null,
           commercial_highlights: form.commercial_highlights.trim() || null,
@@ -1639,6 +1781,24 @@ export default function EditarProdutoPage() {
                     </option>
                   ))}
                 </select>
+              </Field>
+
+              <Field label="Grupo no catálogo">
+                <select
+                  name="catalog_group_id"
+                  value={form.catalog_group_id}
+                  onChange={handleChange}
+                >
+                  <option value="">Sem grupo comercial</option>
+                  {catalogGroups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
+                <small className="field-helper">
+                  Sugerido automaticamente pelo nome e categoria quando estiver sem grupo. Você pode alterar manualmente.
+                </small>
               </Field>
 
               <Field label="Código interno">
@@ -2397,20 +2557,122 @@ export default function EditarProdutoPage() {
                   <option value="KIT">Kit</option>
                 </select>
               </Field>
-
-              <Field label="Preço de venda (R$)">
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  name="sale_price"
-                  value={form.sale_price}
-                  onChange={handleChange}
-                  placeholder="0,00"
-                />
-              </Field>
             </div>
           </section>
+
+          <section className="form-section commercial-pricing-section">
+            <div className="section-heading">
+              <div>
+                <h2>Preços e caixa master</h2>
+                <p>
+                  Configure as modalidades comerciais. Preencha somente o que fizer sentido
+                  para este produto.
+                </p>
+              </div>
+            </div>
+
+            <div className="pricing-grid">
+              <div className="pricing-card">
+                <span className="pricing-kicker">UNIDADE</span>
+                <strong>Preço unitário</strong>
+                <p>Venda de uma unidade avulsa do produto.</p>
+                <label>
+                  <span>Preço por unidade</span>
+                  <div className="money-input">
+                    <span>R$</span>
+                    <input
+                      name="unit_price"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.unit_price}
+                      onChange={handleChange}
+                      placeholder="0,00"
+                    />
+                  </div>
+                </label>
+              </div>
+
+              <div className="pricing-card pricing-card-featured">
+                <span className="pricing-kicker">PACOTE / EMBALAGEM</span>
+                <strong>Preço da embalagem comercial</strong>
+                <p>
+                  Usa a quantidade e unidade informadas em “Medidas e embalagem”.
+                </p>
+                <div className="package-preview">
+                  {form.package_quantity || "1"} {form.package_unit || "UNIDADE"}
+                </div>
+                <label>
+                  <span>Preço do pacote</span>
+                  <div className="money-input">
+                    <span>R$</span>
+                    <input
+                      name="package_price"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.package_price}
+                      onChange={handleChange}
+                      placeholder="0,00"
+                    />
+                  </div>
+                </label>
+              </div>
+
+              <div className="pricing-card">
+                <span className="pricing-kicker">CAIXA MASTER</span>
+                <strong>Venda em volume</strong>
+                <p>Informe quantos pacotes/embalagens comerciais existem na caixa master.</p>
+                <div className="master-fields">
+                  <label>
+                    <span>Pacotes por master</span>
+                    <input
+                      name="master_package_quantity"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={form.master_package_quantity}
+                      onChange={handleChange}
+                      placeholder="Ex.: 20"
+                    />
+                  </label>
+
+                  <label>
+                    <span>Preço da caixa master</span>
+                    <div className="money-input">
+                      <span>R$</span>
+                      <input
+                        name="master_price"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={form.master_price}
+                        onChange={handleChange}
+                        placeholder="0,00"
+                      />
+                    </div>
+                  </label>
+                </div>
+
+                {form.master_package_quantity && (
+                  <div className="master-total">
+                    Total aproximado:{" "}
+                    <strong>
+                      {(Number(form.master_package_quantity) || 0) *
+                        (Number(form.package_quantity) || 1)}{" "}
+                      {form.package_unit || "UNIDADE"}
+                    </strong>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="pricing-note">
+              O preço antigo do produto continua compatível com o sistema e passa a acompanhar
+              o preço do pacote/embalagem comercial.
+            </div>
+          </section>
+
 
           <section className="form-section">
             <div className="section-heading">
@@ -2476,7 +2738,7 @@ export default function EditarProdutoPage() {
                 ["package", "Embalagem", "Quantidade e unidade por embalagem."],
                 ["specifications", "Informações adicionais", "Especificações complementares."],
                 ["variants", "Cores / variações", "Cores, modelos, tamanhos ou outras opções."],
-                ["price", "Preço de venda", "Valor comercial exibido para vendedor e cliente."],
+                ["price", "Preços comerciais", "Valores de unidade, pacote e caixa master exibidos para vendedor e cliente."],
               ].map(([key, title, description]) => {
                 const typedKey = key as keyof CommercialVisibility;
                 const enabled = commercialVisibility[typedKey];
@@ -4176,6 +4438,150 @@ export default function EditarProdutoPage() {
           .secondary-button,
           .primary-button {
             width: 100%;
+          }
+        }
+        .field-helper {
+          display: block;
+          margin-top: 7px;
+          color: #8c7d75;
+          font-size: 12px;
+          line-height: 1.45;
+        }
+
+        .pricing-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 16px;
+          margin-top: 18px;
+        }
+
+        .pricing-card {
+          position: relative;
+          overflow: hidden;
+          padding: 20px;
+          border: 1px solid #eadfd9;
+          border-radius: 18px;
+          background: linear-gradient(180deg, #ffffff 0%, #fcfaf8 100%);
+          transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+        }
+
+        .pricing-card:hover {
+          transform: translateY(-2px);
+          border-color: #dfcfc7;
+          box-shadow: 0 16px 34px rgba(75, 45, 31, 0.08);
+        }
+
+        .pricing-card-featured {
+          border-color: rgba(239, 122, 0, 0.35);
+          background: linear-gradient(180deg, #fffaf4 0%, #ffffff 100%);
+        }
+
+        .pricing-kicker {
+          display: inline-flex;
+          margin-bottom: 12px;
+          color: #ef7a00;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: 0.11em;
+        }
+
+        .pricing-card > strong {
+          display: block;
+          color: #352720;
+          font-size: 16px;
+        }
+
+        .pricing-card > p {
+          min-height: 38px;
+          margin: 7px 0 16px;
+          color: #84766f;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        .pricing-card label,
+        .master-fields label {
+          display: grid;
+          gap: 7px;
+          color: #65564f;
+          font-size: 11px;
+          font-weight: 800;
+        }
+
+        .pricing-card input {
+          width: 100%;
+          box-sizing: border-box;
+        }
+
+        .money-input {
+          display: grid;
+          grid-template-columns: auto 1fr;
+          align-items: center;
+          overflow: hidden;
+          border: 1px solid #dfd5cf;
+          border-radius: 12px;
+          background: #fff;
+        }
+
+        .money-input > span {
+          padding-left: 12px;
+          color: #9a8b83;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .money-input input {
+          border: 0 !important;
+          box-shadow: none !important;
+          background: transparent !important;
+        }
+
+        .package-preview {
+          margin: -4px 0 12px;
+          padding: 9px 11px;
+          border-radius: 10px;
+          background: #f5eee9;
+          color: #8f2a18;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .master-fields {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 12px;
+        }
+
+        .master-total {
+          margin-top: 12px;
+          padding: 10px 11px;
+          border-radius: 10px;
+          background: #f7f2ee;
+          color: #766860;
+          font-size: 11px;
+        }
+
+        .master-total strong {
+          color: #8f2a18;
+        }
+
+        .pricing-note {
+          margin-top: 14px;
+          padding: 12px 14px;
+          border-radius: 12px;
+          background: #fff8ef;
+          color: #806c5e;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        @media (max-width: 1050px) {
+          .pricing-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .pricing-card > p {
+            min-height: 0;
           }
         }
       `}</style>
