@@ -1,10 +1,10 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import AppSidebar from "@/components/AppSidebar";
 
 type Catalog = {
   id: string;
@@ -20,6 +20,7 @@ type Catalog = {
   valid_until: string | null;
   share_enabled: boolean;
   share_token: string | null;
+  sent_at: string | null;
 };
 
 type CatalogResponse = {
@@ -32,17 +33,24 @@ type CatalogResponse = {
   submitted_at: string;
 };
 
-type Filter = "all" | "new" | "active" | "expired";
+type Filter = "current" | "new" | "active" | "responded" | "expired" | "archived";
+
+type ConfirmAction = {
+  type: "archive" | "delete";
+  catalog: Catalog;
+} | null;
 
 export default function GerenciarCatalogosPage() {
   const router = useRouter();
   const [catalogs, setCatalogs] = useState<Catalog[]>([]);
   const [responses, setResponses] = useState<CatalogResponse[]>([]);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>("current");
   const [loading, setLoading] = useState(true);
   const [actionCatalogId, setActionCatalogId] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState("");
+  const [feedbackTone, setFeedbackTone] = useState<"success" | "warning" | "error">("success");
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [duplicateSource, setDuplicateSource] = useState<Catalog | null>(null);
   const [duplicateName, setDuplicateName] = useState("");
   const [duplicateClientName, setDuplicateClientName] = useState("");
@@ -51,6 +59,25 @@ export default function GerenciarCatalogosPage() {
   const [duplicateValidUntil, setDuplicateValidUntil] = useState("");
   const [duplicating, setDuplicating] = useState(false);
   const [duplicateFeedback, setDuplicateFeedback] = useState("");
+  const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    if (!actionFeedback) return;
+
+    const timer = window.setTimeout(() => {
+      setActionFeedback("");
+    }, 3800);
+
+    return () => window.clearTimeout(timer);
+  }, [actionFeedback]);
+
+  function showFeedback(
+    message: string,
+    tone: "success" | "warning" | "error" = "success"
+  ) {
+    setFeedbackTone(tone);
+    setActionFeedback(message);
+  }
 
   useEffect(() => {
     async function loadData() {
@@ -60,9 +87,8 @@ export default function GerenciarCatalogosPage() {
         supabase
           .from("catalogs")
           .select(
-            "id, name, description, cover_title, cover_subtitle, status, created_at, client_name, client_company, client_contact, valid_until, share_enabled, share_token"
+            "id, name, description, cover_title, cover_subtitle, status, created_at, client_name, client_company, client_contact, valid_until, share_enabled, share_token, sent_at"
           )
-          .eq("active", true)
           .order("created_at", { ascending: false }),
 
         supabase
@@ -133,7 +159,7 @@ export default function GerenciarCatalogosPage() {
 
   async function copyCatalogLink(catalog: Catalog) {
     if (!catalog.share_enabled || !catalog.share_token) {
-      setActionFeedback("Ative o link desse catálogo antes de copiá-lo.");
+      showFeedback("Ative o link deste catálogo antes de copiá-lo.", "warning");
       return;
     }
 
@@ -141,7 +167,7 @@ export default function GerenciarCatalogosPage() {
 
     try {
       await navigator.clipboard.writeText(url);
-      setActionFeedback(`Link de "${catalog.name}" copiado.`);
+      showFeedback(`Link de "${catalog.name}" copiado.`, "success");
     } catch {
       setActionFeedback(url);
     }
@@ -170,7 +196,7 @@ export default function GerenciarCatalogosPage() {
       .eq("id", catalog.id);
 
     if (error) {
-      setActionFeedback(`Erro: ${error.message}`);
+      showFeedback(`Erro: ${error.message}`, "error");
       setActionCatalogId(null);
       return;
     }
@@ -190,6 +216,135 @@ export default function GerenciarCatalogosPage() {
     );
     setActionCatalogId(null);
   }
+
+  function requestCatalogAction(type: "archive" | "delete", catalog: Catalog) {
+    if (type === "delete" && !canDeleteCatalog(catalog)) {
+      showFeedback(
+        `"${catalog.name}" possui histórico ou já foi enviado. Arquive em vez de excluir.`,
+        "warning"
+      );
+      return;
+    }
+
+    setConfirmAction({ type, catalog });
+  }
+
+  async function archiveCatalog(catalog: Catalog) {
+    if (catalog.status === "archived") return;
+
+    setConfirmAction(null);
+    setActionCatalogId(catalog.id);
+    setActionFeedback("");
+
+    const { error } = await supabase
+      .from("catalogs")
+      .update({
+        status: "archived",
+        share_enabled: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", catalog.id);
+
+    if (error) {
+      showFeedback(`Erro ao arquivar: ${error.message}`, "error");
+      setActionCatalogId(null);
+      return;
+    }
+
+    setCatalogs((current) =>
+      current.map((item) =>
+        item.id === catalog.id
+          ? { ...item, status: "archived", share_enabled: false }
+          : item
+      )
+    );
+
+    showFeedback(`"${catalog.name}" foi arquivado. O histórico continua preservado.`, "success");
+    setActionCatalogId(null);
+  }
+
+  async function restoreCatalog(catalog: Catalog) {
+    if (catalog.status !== "archived") return;
+
+    setActionCatalogId(catalog.id);
+    setActionFeedback("");
+
+    const { error } = await supabase
+      .from("catalogs")
+      .update({
+        status: "draft",
+        share_enabled: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", catalog.id);
+
+    if (error) {
+      showFeedback(`Erro ao restaurar: ${error.message}`, "error");
+      setActionCatalogId(null);
+      return;
+    }
+
+    setCatalogs((current) =>
+      current.map((item) =>
+        item.id === catalog.id
+          ? { ...item, status: "draft", share_enabled: false }
+          : item
+      )
+    );
+
+    showFeedback(`"${catalog.name}" voltou para os catálogos em andamento.`, "success");
+    setActionCatalogId(null);
+  }
+
+  function canDeleteCatalog(catalog: Catalog) {
+    return (
+      catalog.status === "draft" &&
+      !catalog.share_enabled &&
+      !catalog.sent_at &&
+      catalogResponses(catalog.id).length === 0
+    );
+  }
+
+  async function deleteDraftCatalog(catalog: Catalog) {
+    if (!canDeleteCatalog(catalog)) {
+      showFeedback(
+        `"${catalog.name}" possui histórico ou já foi enviado. Arquive em vez de excluir.`,
+        "warning"
+      );
+      return;
+    }
+
+    setConfirmAction(null);
+    setActionCatalogId(catalog.id);
+    setActionFeedback("");
+
+    const { error: productsError } = await supabase
+      .from("catalog_products")
+      .delete()
+      .eq("catalog_id", catalog.id);
+
+    if (productsError) {
+      showFeedback(`Erro ao excluir itens do catálogo: ${productsError.message}`, "error");
+      setActionCatalogId(null);
+      return;
+    }
+
+    const { error: catalogError } = await supabase
+      .from("catalogs")
+      .delete()
+      .eq("id", catalog.id);
+
+    if (catalogError) {
+      showFeedback(`Erro ao excluir catálogo: ${catalogError.message}`, "error");
+      setActionCatalogId(null);
+      return;
+    }
+
+    setCatalogs((current) => current.filter((item) => item.id !== catalog.id));
+    showFeedback(`"${catalog.name}" foi excluído definitivamente.`, "success");
+    setActionCatalogId(null);
+  }
+
 
   function openDuplicateModal(catalog: Catalog) {
     setDuplicateSource(catalog);
@@ -226,7 +381,9 @@ export default function GerenciarCatalogosPage() {
     try {
       const { data: sourceProducts, error: sourceProductsError } = await supabase
         .from("catalog_products")
-        .select("product_id, position, custom_price")
+        .select(
+          "product_id, position, custom_price, custom_unit_price, custom_package_price, custom_master_price, show_unit_price, show_package_price, show_master_price"
+        )
         .eq("catalog_id", duplicateSource.id)
         .order("position");
 
@@ -251,7 +408,7 @@ export default function GerenciarCatalogosPage() {
           active: true,
         })
         .select(
-          "id, name, description, cover_title, cover_subtitle, status, created_at, client_name, client_company, client_contact, valid_until, share_enabled, share_token"
+          "id, name, description, cover_title, cover_subtitle, status, created_at, client_name, client_company, client_contact, valid_until, share_enabled, share_token, sent_at"
         )
         .single();
 
@@ -265,6 +422,12 @@ export default function GerenciarCatalogosPage() {
           product_id: item.product_id,
           position: item.position,
           custom_price: item.custom_price,
+          custom_unit_price: item.custom_unit_price,
+          custom_package_price: item.custom_package_price,
+          custom_master_price: item.custom_master_price,
+          show_unit_price: item.show_unit_price,
+          show_package_price: item.show_package_price,
+          show_master_price: item.show_master_price,
         }));
 
         const { error: insertProductsError } = await supabase
@@ -296,6 +459,20 @@ export default function GerenciarCatalogosPage() {
     }
   }
 
+  async function handleSignOut() {
+    if (signingOut) return;
+
+    setSigningOut(true);
+
+    try {
+      await supabase.auth.signOut();
+      router.replace("/login");
+      router.refresh();
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
   const filteredCatalogs = useMemo(() => {
     const normalized = query.trim().toLowerCase();
 
@@ -303,11 +480,15 @@ export default function GerenciarCatalogosPage() {
       const newCount = newResponseCount(catalog.id);
       const expired = isExpired(catalog);
 
+      const responseCount = catalogResponses(catalog.id).length;
+
       const filterMatch =
-        filter === "all" ||
-        (filter === "new" && newCount > 0) ||
-        (filter === "active" && catalog.share_enabled) ||
-        (filter === "expired" && expired);
+        (filter === "current" && catalog.status !== "archived") ||
+        (filter === "new" && catalog.status !== "archived" && newCount > 0) ||
+        (filter === "active" && catalog.status !== "archived" && catalog.share_enabled) ||
+        (filter === "responded" && catalog.status !== "archived" && responseCount > 0) ||
+        (filter === "expired" && catalog.status !== "archived" && expired) ||
+        (filter === "archived" && catalog.status === "archived");
 
       const text = [
         catalog.name,
@@ -322,13 +503,63 @@ export default function GerenciarCatalogosPage() {
     });
   }, [catalogs, responses, query, filter]);
 
+  const currentCatalogs = catalogs.filter((catalog) => catalog.status !== "archived");
+  const archivedCatalogs = catalogs.filter((catalog) => catalog.status === "archived");
   const totalNew = responses.filter((response) => response.status === "submitted").length;
-  const activeLinks = catalogs.filter((catalog) => catalog.share_enabled).length;
-  const expiredCount = catalogs.filter((catalog) => isExpired(catalog)).length;
+  const activeLinks = currentCatalogs.filter((catalog) => catalog.share_enabled).length;
+  const expiredCount = currentCatalogs.filter((catalog) => isExpired(catalog)).length;
 
   return (
     <main className="page-shell">
-      <AppSidebar />
+      <aside className="sidebar">
+        <Link href="/" className="brand-link">
+          <Image
+            src="/brand/camel-paper-logo.png"
+            alt="Camel Paper"
+            width={170}
+            height={70}
+            priority
+          />
+        </Link>
+
+        <nav>
+          <Link href="/" className="nav-link">
+            ▦ <span>Produtos</span>
+          </Link>
+          <span className="nav-link muted">
+            ▤ <span>Categorias</span>
+          </span>
+          <Link href="/catalogos" className="nav-link">
+            ＋ <span>Criar catálogo</span>
+          </Link>
+          <Link href="/catalogos/gerenciar" className="nav-link active">
+            ◫ <span>Central de catálogos</span>
+          </Link>
+          <Link href="/catalogo" className="nav-link">
+            ◉ <span>Catálogo de vendedor</span>
+          </Link>
+        </nav>
+
+        <div className="admin account-footer">
+          <div className="account-user">
+            <div className="avatar">KG</div>
+            <div>
+              <strong>Administrador</strong>
+              <small>Camel Paper</small>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="sidebar-logout"
+            onClick={handleSignOut}
+            disabled={signingOut}
+          >
+            <span>↪</span>
+            {signingOut ? "Saindo..." : "Sair da conta"}
+          </button>
+        </div>
+      </aside>
 
       <section className="content">
         <header className="page-header">
@@ -348,8 +579,8 @@ export default function GerenciarCatalogosPage() {
         <section className="stats-grid">
           <div>
             <span>CATÁLOGOS</span>
-            <strong>{catalogs.length}</strong>
-            <small>ativos no sistema</small>
+            <strong>{currentCatalogs.length}</strong>
+            <small>em andamento</small>
           </div>
           <div className={totalNew > 0 ? "highlight" : ""}>
             <span>RESPOSTAS NOVAS</span>
@@ -365,6 +596,11 @@ export default function GerenciarCatalogosPage() {
             <span>EXPIRADOS</span>
             <strong>{expiredCount}</strong>
             <small>fora da validade</small>
+          </div>
+          <div>
+            <span>ARQUIVADOS</span>
+            <strong>{archivedCatalogs.length}</strong>
+            <small>histórico preservado</small>
           </div>
         </section>
 
@@ -382,17 +618,17 @@ export default function GerenciarCatalogosPage() {
             <div className="filters">
               <button
                 type="button"
-                className={filter === "all" ? "active" : ""}
-                onClick={() => setFilter("all")}
+                className={filter === "current" ? "active" : ""}
+                onClick={() => setFilter("current")}
               >
-                Todos
+                Em andamento
               </button>
               <button
                 type="button"
                 className={filter === "new" ? "active" : ""}
                 onClick={() => setFilter("new")}
               >
-                Com resposta nova
+                Resposta nova
               </button>
               <button
                 type="button"
@@ -403,18 +639,48 @@ export default function GerenciarCatalogosPage() {
               </button>
               <button
                 type="button"
+                className={filter === "responded" ? "active" : ""}
+                onClick={() => setFilter("responded")}
+              >
+                Respondidos
+              </button>
+              <button
+                type="button"
                 className={filter === "expired" ? "active" : ""}
                 onClick={() => setFilter("expired")}
               >
                 Expirados
               </button>
+              <button
+                type="button"
+                className={filter === "archived" ? "active" : ""}
+                onClick={() => setFilter("archived")}
+              >
+                Arquivados
+              </button>
             </div>
           </div>
 
           {actionFeedback && (
-            <div className="action-feedback">
-              <span>{actionFeedback}</span>
-              <button type="button" onClick={() => setActionFeedback("")}>
+            <div className={`action-feedback ${feedbackTone}`} role="status">
+              <span className="feedback-icon" aria-hidden="true">
+                {feedbackTone === "success" ? "✓" : feedbackTone === "error" ? "!" : "i"}
+              </span>
+              <div>
+                <strong>
+                  {feedbackTone === "success"
+                    ? "Tudo certo"
+                    : feedbackTone === "error"
+                      ? "Não foi possível concluir"
+                      : "Atenção"}
+                </strong>
+                <span>{actionFeedback}</span>
+              </div>
+              <button
+                type="button"
+                aria-label="Fechar aviso"
+                onClick={() => setActionFeedback("")}
+              >
                 ×
               </button>
             </div>
@@ -445,7 +711,9 @@ export default function GerenciarCatalogosPage() {
 
                 return (
                   <div
-                    className={`table-row ${newCount > 0 ? "has-new" : ""}`}
+                    className={`table-row ${newCount > 0 ? "has-new" : ""} ${
+                      catalog.status === "archived" ? "is-archived" : ""
+                    }`}
                     key={catalog.id}
                   >
                     <div className="catalog-cell">
@@ -548,20 +816,55 @@ export default function GerenciarCatalogosPage() {
                         Copiar link
                       </button>
 
-                      <button
-                        type="button"
-                        className={`action-button ${
-                          catalog.share_enabled ? "danger-action" : "activate-action"
-                        }`}
-                        onClick={() => toggleCatalogShare(catalog)}
-                        disabled={actionCatalogId === catalog.id}
-                      >
-                        {actionCatalogId === catalog.id
-                          ? "Aguarde..."
-                          : catalog.share_enabled
-                            ? "Desativar"
-                            : "Ativar link"}
-                      </button>
+                      {catalog.status !== "archived" ? (
+                        <>
+                          <button
+                            type="button"
+                            className={`action-button ${
+                              catalog.share_enabled ? "danger-action" : "activate-action"
+                            }`}
+                            onClick={() => toggleCatalogShare(catalog)}
+                            disabled={actionCatalogId === catalog.id}
+                          >
+                            {actionCatalogId === catalog.id
+                              ? "Aguarde..."
+                              : catalog.share_enabled
+                                ? "Desativar"
+                                : "Ativar link"}
+                          </button>
+
+                          <button
+                            type="button"
+                            className="action-button archive-action"
+                            onClick={() => requestCatalogAction("archive", catalog)}
+                            disabled={actionCatalogId === catalog.id}
+                            title="Desativa o link e preserva todo o histórico"
+                          >
+                            Arquivar
+                          </button>
+
+                          {canDeleteCatalog(catalog) && (
+                            <button
+                              type="button"
+                              className="action-button delete-action"
+                              onClick={() => requestCatalogAction("delete", catalog)}
+                              disabled={actionCatalogId === catalog.id}
+                              title="Disponível apenas para rascunhos nunca enviados e sem respostas"
+                            >
+                              Excluir
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="action-button restore-action"
+                          onClick={() => restoreCatalog(catalog)}
+                          disabled={actionCatalogId === catalog.id}
+                        >
+                          Restaurar
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -570,6 +873,73 @@ export default function GerenciarCatalogosPage() {
           )}
         </section>
       </section>
+
+      {confirmAction && (
+        <div
+          className="confirm-backdrop"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !actionCatalogId) {
+              setConfirmAction(null);
+            }
+          }}
+        >
+          <section
+            className={`confirm-modal ${
+              confirmAction.type === "delete" ? "danger" : "archive"
+            }`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-action-title"
+          >
+            <div className="confirm-symbol" aria-hidden="true">
+              {confirmAction.type === "delete" ? "!" : "↘"}
+            </div>
+
+            <div className="confirm-copy">
+              <span>
+                {confirmAction.type === "delete" ? "EXCLUSÃO DEFINITIVA" : "ARQUIVAR CATÁLOGO"}
+              </span>
+              <h2 id="confirm-action-title">
+                {confirmAction.type === "delete"
+                  ? `Excluir "${confirmAction.catalog.name}"?`
+                  : `Arquivar "${confirmAction.catalog.name}"?`}
+              </h2>
+              <p>
+                {confirmAction.type === "delete"
+                  ? "Este catálogo nunca foi enviado e não possui respostas. A exclusão removerá o registro e seus itens definitivamente."
+                  : "O link será desativado e o catálogo sairá da visão principal. Produtos, respostas e histórico comercial continuarão preservados."}
+              </p>
+            </div>
+
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className="confirm-cancel"
+                onClick={() => setConfirmAction(null)}
+                disabled={Boolean(actionCatalogId)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="confirm-primary"
+                onClick={() =>
+                  confirmAction.type === "delete"
+                    ? deleteDraftCatalog(confirmAction.catalog)
+                    : archiveCatalog(confirmAction.catalog)
+                }
+                disabled={Boolean(actionCatalogId)}
+              >
+                {actionCatalogId
+                  ? "Processando..."
+                  : confirmAction.type === "delete"
+                    ? "Excluir definitivamente"
+                    : "Arquivar catálogo"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {duplicateSource && (
         <div className="duplicate-backdrop" onClick={closeDuplicateModal}>
@@ -869,7 +1239,7 @@ export default function GerenciarCatalogosPage() {
           max-width: 1360px;
           margin: 0 auto 16px;
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(5, minmax(0, 1fr));
           gap: 12px;
         }
 
@@ -1193,37 +1563,244 @@ export default function GerenciarCatalogosPage() {
           color: #a13a28;
         }
 
+
+        .quick-actions .archive-action {
+          color: #715f56;
+          border-color: #d8cdc7;
+          background: #f8f5f3;
+        }
+
+        .quick-actions .restore-action {
+          color: #2f7d4b;
+          border-color: #bdddc8;
+          background: #f2fbf5;
+        }
+
+        .quick-actions .delete-action {
+          color: #a22d22;
+          border-color: #e9beb8;
+          background: #fff5f3;
+        }
+
+        .table-row.is-archived {
+          opacity: .78;
+          background: #faf8f6;
+        }
+
         .quick-actions button:disabled {
           opacity: .45;
           cursor: not-allowed;
         }
 
         .action-feedback {
-          margin: 0 16px 12px;
-          padding: 10px 12px;
-          border-radius: 9px;
-          border: 1px solid #efd0b5;
-          background: #fff7ef;
-          color: #8a2a18;
-          display: flex;
+          position: fixed;
+          top: 84px;
+          right: 24px;
+          z-index: 180;
+          width: min(390px, calc(100vw - 32px));
+          box-sizing: border-box;
+          padding: 13px 14px;
+          border-radius: 14px;
+          border: 1px solid #e7ddd7;
+          background: rgba(255,255,255,.97);
+          box-shadow: 0 18px 48px rgba(45, 31, 25, .16);
+          backdrop-filter: blur(10px);
+          display: grid;
+          grid-template-columns: 30px minmax(0, 1fr) 26px;
           align-items: center;
-          justify-content: space-between;
-          gap: 12px;
+          gap: 10px;
+          animation: toastIn .28s cubic-bezier(.2,.8,.2,1) both;
+        }
+
+        .action-feedback.success {
+          border-color: #cde5d5;
+        }
+
+        .action-feedback.warning {
+          border-color: #f0d5ad;
+        }
+
+        .action-feedback.error {
+          border-color: #ebc3bc;
+        }
+
+        .feedback-icon {
+          width: 30px;
+          height: 30px;
+          border-radius: 9px;
+          display: grid;
+          place-items: center;
+          font-size: 13px;
+          font-weight: 950;
+          background: #f2f7f3;
+          color: #378052;
+        }
+
+        .action-feedback.warning .feedback-icon {
+          background: #fff6e8;
+          color: #c36a10;
+        }
+
+        .action-feedback.error .feedback-icon {
+          background: #fff0ed;
+          color: #a63a2b;
+        }
+
+        .action-feedback > div {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .action-feedback strong {
+          color: #352821;
+          font-size: 9px;
+        }
+
+        .action-feedback > div > span {
+          color: #7e7069;
           font-size: 8px;
-          font-weight: 800;
+          line-height: 1.45;
         }
 
         .action-feedback button {
-          width: 24px;
-          height: 24px;
-          flex: 0 0 auto;
+          width: 26px;
+          height: 26px;
           border: 0;
-          border-radius: 50%;
-          background: #fff;
-          color: #8a2a18;
-          font-size: 14px;
+          border-radius: 8px;
+          background: transparent;
+          color: #9a8d86;
+          font-size: 17px;
           line-height: 1;
           cursor: pointer;
+        }
+
+        .action-feedback button:hover {
+          background: #f5f1ef;
+          color: #5a4840;
+        }
+
+        @keyframes toastIn {
+          from { opacity: 0; transform: translateY(-8px) scale(.98); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .confirm-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 170;
+          padding: 24px;
+          background: rgba(35, 26, 22, .48);
+          backdrop-filter: blur(7px);
+          display: grid;
+          place-items: center;
+          animation: backdropIn .18s ease both;
+        }
+
+        .confirm-modal {
+          width: min(470px, 94vw);
+          box-sizing: border-box;
+          border: 1px solid #e6dcd6;
+          border-radius: 20px;
+          background: #fff;
+          padding: 24px;
+          box-shadow: 0 30px 90px rgba(30, 20, 16, .25);
+          animation: modalIn .24s cubic-bezier(.2,.8,.2,1) both;
+        }
+
+        .confirm-symbol {
+          width: 42px;
+          height: 42px;
+          margin-bottom: 17px;
+          border-radius: 13px;
+          display: grid;
+          place-items: center;
+          background: #fff4e9;
+          color: #c76817;
+          font-size: 18px;
+          font-weight: 950;
+        }
+
+        .confirm-modal.danger .confirm-symbol {
+          background: #fff0ed;
+          color: #aa3828;
+        }
+
+        .confirm-copy > span {
+          color: #ef7a00;
+          font-size: 8px;
+          font-weight: 950;
+          letter-spacing: 1.25px;
+        }
+
+        .confirm-modal.danger .confirm-copy > span {
+          color: #aa3828;
+        }
+
+        .confirm-copy h2 {
+          margin: 6px 0 8px;
+          color: #30231e;
+          font-size: 20px;
+          line-height: 1.15;
+        }
+
+        .confirm-copy p {
+          margin: 0;
+          color: #7b6e67;
+          font-size: 10px;
+          line-height: 1.55;
+        }
+
+        .confirm-actions {
+          margin-top: 22px;
+          padding-top: 16px;
+          border-top: 1px solid #eee6e1;
+          display: flex;
+          justify-content: flex-end;
+          gap: 9px;
+        }
+
+        .confirm-actions button {
+          min-height: 38px;
+          padding: 0 14px;
+          border-radius: 10px;
+          font-size: 9px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .confirm-actions button:disabled {
+          opacity: .55;
+          cursor: wait;
+        }
+
+        .confirm-cancel {
+          border: 1px solid #ded4ce;
+          background: #fff;
+          color: #6f6059;
+        }
+
+        .confirm-primary {
+          border: 1px solid #8a2a18;
+          background: #8a2a18;
+          color: #fff;
+          box-shadow: 0 8px 22px rgba(138,42,24,.16);
+        }
+
+        .confirm-modal.danger .confirm-primary {
+          border-color: #a93628;
+          background: #a93628;
+        }
+
+        @keyframes backdropIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        @keyframes modalIn {
+          from { opacity: 0; transform: translateY(10px) scale(.985); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
         }
 
         .quick-actions .duplicate-action {
