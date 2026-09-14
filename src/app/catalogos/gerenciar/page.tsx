@@ -21,6 +21,7 @@ type Catalog = {
   share_enabled: boolean;
   share_token: string | null;
   sent_at: string | null;
+  created_by: string | null;
 };
 
 type CatalogResponse = {
@@ -60,6 +61,9 @@ export default function GerenciarCatalogosPage() {
   const [duplicating, setDuplicating] = useState(false);
   const [duplicateFeedback, setDuplicateFeedback] = useState("");
   const [signingOut, setSigningOut] = useState(false);
+  const [currentRole, setCurrentRole] = useState<"admin" | "commercial" | "seller" | "viewer" | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [profileName, setProfileName] = useState("Usuário");
 
   useEffect(() => {
     if (!actionFeedback) return;
@@ -83,35 +87,82 @@ export default function GerenciarCatalogosPage() {
     async function loadData() {
       setLoading(true);
 
-      const [catalogResult, responseResult] = await Promise.all([
-        supabase
-          .from("catalogs")
-          .select(
-            "id, name, description, cover_title, cover_subtitle, status, created_at, client_name, client_company, client_contact, valid_until, share_enabled, share_token, sent_at"
-          )
-          .order("created_at", { ascending: false }),
+      const { data: authData } = await supabase.auth.getUser();
+      const user = authData.user;
 
-        supabase
-          .from("catalog_responses")
-          .select(
-            "id, catalog_id, customer_name, customer_company, total_amount, status, submitted_at"
-          )
-          .order("submitted_at", { ascending: false }),
-      ]);
-
-      if (!catalogResult.error) {
-        setCatalogs((catalogResult.data || []) as Catalog[]);
+      if (!user) {
+        setLoading(false);
+        router.replace("/login");
+        return;
       }
 
-      if (!responseResult.error) {
-        setResponses((responseResult.data || []) as CatalogResponse[]);
+      setCurrentUserId(user.id);
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const role = (profile?.role || null) as
+        | "admin"
+        | "commercial"
+        | "seller"
+        | "viewer"
+        | null;
+
+      setCurrentRole(role);
+      setProfileName(
+        user.user_metadata?.full_name ||
+          user.user_metadata?.name ||
+          user.email?.split("@")[0] ||
+          "Usuário"
+      );
+
+      let catalogQuery = supabase
+        .from("catalogs")
+        .select(
+          "id, name, description, cover_title, cover_subtitle, status, created_at, client_name, client_company, client_contact, valid_until, share_enabled, share_token, sent_at, created_by"
+        )
+        .order("created_at", { ascending: false });
+
+      // Vendedor enxerga somente os catálogos criados por ele.
+      if (role === "seller") {
+        catalogQuery = catalogQuery.eq("created_by", user.id);
+      }
+
+      const catalogResult = await catalogQuery;
+      const loadedCatalogs = !catalogResult.error
+        ? ((catalogResult.data || []) as Catalog[])
+        : [];
+
+      setCatalogs(loadedCatalogs);
+
+      const catalogIds = loadedCatalogs.map((catalog) => catalog.id);
+
+      if (catalogIds.length === 0) {
+        setResponses([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: responseData, error: responseError } = await supabase
+        .from("catalog_responses")
+        .select(
+          "id, catalog_id, customer_name, customer_company, total_amount, status, submitted_at"
+        )
+        .in("catalog_id", catalogIds)
+        .order("submitted_at", { ascending: false });
+
+      if (!responseError) {
+        setResponses((responseData || []) as CatalogResponse[]);
       }
 
       setLoading(false);
     }
 
     loadData();
-  }, []);
+  }, [router]);
 
   function localDateString() {
     const now = new Date();
@@ -218,6 +269,11 @@ export default function GerenciarCatalogosPage() {
   }
 
   function requestCatalogAction(type: "archive" | "delete", catalog: Catalog) {
+    if (currentRole === "seller" || currentRole === "viewer") {
+      showFeedback("Essa ação é restrita ao Comercial/Admin.", "warning");
+      return;
+    }
+
     if (type === "delete" && !canDeleteCatalog(catalog)) {
       showFeedback(
         `"${catalog.name}" possui histórico ou já foi enviado. Arquive em vez de excluir.`,
@@ -406,9 +462,10 @@ export default function GerenciarCatalogosPage() {
           sent_at: null,
           status: "draft",
           active: true,
+          created_by: currentUserId,
         })
         .select(
-          "id, name, description, cover_title, cover_subtitle, status, created_at, client_name, client_company, client_contact, valid_until, share_enabled, share_token, sent_at"
+          "id, name, description, cover_title, cover_subtitle, status, created_at, client_name, client_company, client_contact, valid_until, share_enabled, share_token, sent_at, created_by"
         )
         .single();
 
@@ -523,29 +580,52 @@ export default function GerenciarCatalogosPage() {
         </Link>
 
         <nav>
-          <Link href="/" className="nav-link">
-            ▦ <span>Produtos</span>
-          </Link>
-          <span className="nav-link muted">
-            ▤ <span>Categorias</span>
-          </span>
-          <Link href="/catalogos" className="nav-link">
-            ＋ <span>Criar catálogo</span>
-          </Link>
-          <Link href="/catalogos/gerenciar" className="nav-link active">
-            ◫ <span>Central de catálogos</span>
-          </Link>
+          {currentRole && currentRole !== "seller" && currentRole !== "viewer" && (
+            <>
+              <Link href="/" className="nav-link">
+                ▦ <span>Produtos</span>
+              </Link>
+              <Link href="/categorias" className="nav-link">
+                ▤ <span>Categorias</span>
+              </Link>
+            </>
+          )}
+
+          {(currentRole === "admin" ||
+            currentRole === "commercial" ||
+            currentRole === "seller") && (
+            <Link href="/catalogos" className="nav-link">
+              ＋ <span>Criar catálogo</span>
+            </Link>
+          )}
+
+          {(currentRole === "admin" ||
+            currentRole === "commercial" ||
+            currentRole === "seller") && (
+            <Link href="/catalogos/gerenciar" className="nav-link active">
+              ◫ <span>{currentRole === "seller" ? "Meus catálogos" : "Central de catálogos"}</span>
+            </Link>
+          )}
+
           <Link href="/catalogo" className="nav-link">
             ◉ <span>Catálogo de vendedor</span>
           </Link>
+
+          {(currentRole === "admin" ||
+            currentRole === "commercial" ||
+            currentRole === "seller") && (
+            <Link href="/pedidos" className="nav-link">
+              ▣ <span>Pedidos</span>
+            </Link>
+          )}
         </nav>
 
         <div className="admin account-footer">
           <div className="account-user">
-            <div className="avatar">KG</div>
+            <div className="avatar">{profileName.slice(0, 2).toUpperCase()}</div>
             <div>
-              <strong>Administrador</strong>
-              <small>Camel Paper</small>
+              <strong>{profileName}</strong>
+              <small>{currentRole === "seller" ? "Vendedor · Camel Paper" : currentRole === "commercial" ? "Comercial · Camel Paper" : "Administrador · Camel Paper"}</small>
             </div>
           </div>
 
@@ -564,10 +644,12 @@ export default function GerenciarCatalogosPage() {
       <section className="content">
         <header className="page-header">
           <div>
-            <span className="eyebrow">GESTÃO COMERCIAL</span>
-            <h1>Central de catálogos</h1>
+            <span className="eyebrow">{currentRole === "seller" ? "ÁREA DO VENDEDOR" : "GESTÃO COMERCIAL"}</span>
+            <h1>{currentRole === "seller" ? "Meus catálogos" : "Central de catálogos"}</h1>
             <p>
-              Acompanhe catálogos enviados, respostas dos clientes, validade e valores.
+              {currentRole === "seller"
+                ? "Acompanhe somente os catálogos criados por você, os links enviados e as respostas dos seus clientes."
+                : "Acompanhe catálogos enviados, respostas dos clientes, validade e valores."}
             </p>
           </div>
 
@@ -816,55 +898,58 @@ export default function GerenciarCatalogosPage() {
                         Copiar link
                       </button>
 
-                      {catalog.status !== "archived" ? (
-                        <>
-                          <button
-                            type="button"
-                            className={`action-button ${
-                              catalog.share_enabled ? "danger-action" : "activate-action"
-                            }`}
-                            onClick={() => toggleCatalogShare(catalog)}
-                            disabled={actionCatalogId === catalog.id}
-                          >
-                            {actionCatalogId === catalog.id
-                              ? "Aguarde..."
-                              : catalog.share_enabled
-                                ? "Desativar"
-                                : "Ativar link"}
-                          </button>
-
-                          <button
-                            type="button"
-                            className="action-button archive-action"
-                            onClick={() => requestCatalogAction("archive", catalog)}
-                            disabled={actionCatalogId === catalog.id}
-                            title="Desativa o link e preserva todo o histórico"
-                          >
-                            Arquivar
-                          </button>
-
-                          {canDeleteCatalog(catalog) && (
-                            <button
-                              type="button"
-                              className="action-button delete-action"
-                              onClick={() => requestCatalogAction("delete", catalog)}
-                              disabled={actionCatalogId === catalog.id}
-                              title="Disponível apenas para rascunhos nunca enviados e sem respostas"
-                            >
-                              Excluir
-                            </button>
-                          )}
-                        </>
-                      ) : (
+                      {catalog.status !== "archived" && (
                         <button
                           type="button"
-                          className="action-button restore-action"
-                          onClick={() => restoreCatalog(catalog)}
+                          className={`action-button ${
+                            catalog.share_enabled ? "danger-action" : "activate-action"
+                          }`}
+                          onClick={() => toggleCatalogShare(catalog)}
                           disabled={actionCatalogId === catalog.id}
                         >
-                          Restaurar
+                          {actionCatalogId === catalog.id
+                            ? "Aguarde..."
+                            : catalog.share_enabled
+                              ? "Desativar"
+                              : "Ativar link"}
                         </button>
                       )}
+
+                      {(currentRole === "admin" || currentRole === "commercial") &&
+                        (catalog.status !== "archived" ? (
+                          <>
+                            <button
+                              type="button"
+                              className="action-button archive-action"
+                              onClick={() => requestCatalogAction("archive", catalog)}
+                              disabled={actionCatalogId === catalog.id}
+                              title="Desativa o link e preserva todo o histórico"
+                            >
+                              Arquivar
+                            </button>
+
+                            {canDeleteCatalog(catalog) && (
+                              <button
+                                type="button"
+                                className="action-button delete-action"
+                                onClick={() => requestCatalogAction("delete", catalog)}
+                                disabled={actionCatalogId === catalog.id}
+                                title="Disponível apenas para rascunhos nunca enviados e sem respostas"
+                              >
+                                Excluir
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            className="action-button restore-action"
+                            onClick={() => restoreCatalog(catalog)}
+                            disabled={actionCatalogId === catalog.id}
+                          >
+                            Restaurar
+                          </button>
+                        ))}
                     </div>
                   </div>
                 );

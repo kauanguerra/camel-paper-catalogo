@@ -5,6 +5,12 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import {
+  getOptimizedCatalogImageUrl,
+  resolveCatalogGallery,
+  resolveCatalogPresentationImage,
+  resolveCatalogVariantImage,
+} from "@/lib/catalog-image-policy";
 import { ArrowLeft, Copy, Link2Off } from "lucide-react";
 
 type Catalog = {
@@ -21,6 +27,7 @@ type Catalog = {
   share_token: string | null;
   share_enabled: boolean;
   sent_at: string | null;
+  products_per_page: 1 | 2 | 4;
 };
 
 type Product = {
@@ -81,6 +88,8 @@ type ProductImage = {
   product_id: string;
   image_url: string;
   catalog_slot: string | null;
+  image_type: string | null;
+  is_primary: boolean | null;
   approved: boolean;
   source: string | null;
   variant_id: string | null;
@@ -93,6 +102,7 @@ type ProductVariant = {
   sku: string | null;
   barcode: string | null;
   color: string | null;
+  image_url: string | null;
   sale_price: number | null;
   active: boolean;
 };
@@ -156,7 +166,7 @@ export default function CatalogPreviewPage() {
         supabase
           .from("catalogs")
           .select(
-            "id, name, description, cover_title, cover_subtitle, status, client_name, client_company, client_contact, valid_until, share_token, share_enabled, sent_at"
+            "id, name, description, cover_title, cover_subtitle, status, client_name, client_company, client_contact, valid_until, share_token, share_enabled, sent_at, products_per_page"
           )
           .eq("id", catalogId)
           .single(),
@@ -248,13 +258,12 @@ export default function CatalogPreviewPage() {
         const [imageResult, variantResult] = await Promise.all([
           supabase
             .from("product_images")
-            .select("id, product_id, image_url, catalog_slot, approved, source, variant_id")
+            .select("id, product_id, image_url, catalog_slot, image_type, is_primary, approved, source, variant_id")
             .in("product_id", productIds)
-            .eq("source", "ai")
             .eq("approved", true),
           supabase
             .from("product_variants")
-            .select("id, product_id, name, sku, barcode, color, sale_price, active")
+            .select("id, product_id, name, sku, barcode, color, image_url, sale_price, active")
             .in("product_id", productIds)
             .eq("active", true)
             .order("created_at", { ascending: true }),
@@ -312,74 +321,37 @@ export default function CatalogPreviewPage() {
     loadCatalog();
   }, [catalogId]);
 
-  function getImage(productId: string, slot = "front") {
-    return (
-      images.find(
-        (image) =>
-          image.product_id === productId &&
-          image.variant_id === null &&
-          image.catalog_slot === slot
-      ) ||
-      images.find((image) => image.product_id === productId && image.variant_id === null) ||
-      images.find((image) => image.product_id === productId) ||
-      null
-    );
-  }
-
-  function getCatalogImages(productId: string) {
-    const slots = ["front", "back", "product", "detail"];
-    const labels: Record<string, string> = {
-      front: "Frente",
-      back: "Verso",
-      product: "Produto",
-      detail: "Detalhe",
-    };
-
-    return slots
-      .map((slot) => ({
-        slot,
-        label: labels[slot],
-        image: images.find(
-          (item) =>
-            item.product_id === productId &&
-            item.variant_id === null &&
-            item.catalog_slot === slot
-        ),
-      }))
-      .filter(
-        (item): item is { slot: string; label: string; image: ProductImage } =>
-          Boolean(item.image)
-      );
-  }
-
   function getProductVariants(productId: string) {
     return variants.filter((variant) => variant.product_id === productId);
   }
 
-  function getVariantImage(productId: string, variantId: string) {
-    const variantImages = images.filter(
-      (image) => image.product_id === productId && image.variant_id === variantId
-    );
+  function getPresentationImage(productId: string) {
+    return resolveCatalogPresentationImage(images, productId);
+  }
+
+  function getImage(productId: string, slot = "front") {
+    if (slot === "front") return getPresentationImage(productId);
 
     return (
-      variantImages.find((image) => image.catalog_slot === "front") ||
-      variantImages[0] ||
-      null
+      resolveCatalogGallery(images, productId).find(
+        (item) => item.slot === slot
+      )?.image || null
     );
   }
 
-  function getOptimizedCatalogImageUrl(
-    sourceUrl: string,
-    width: number,
-    quality = 78
-  ) {
-    const params = new URLSearchParams({
-      src: sourceUrl,
-      w: String(width),
-      q: String(quality),
-    });
+  function getCatalogImages(productId: string): Array<{
+    slot: string;
+    label: string;
+    image: ProductImage;
+  }> {
+    return resolveCatalogGallery(images, productId);
+  }
 
-    return `/api/catalog-image?${params.toString()}`;
+  function getVariantImage(
+    productId: string,
+    variantId: string
+  ): ProductImage | null {
+    return resolveCatalogVariantImage(images, productId, variantId);
   }
 
   function getPublicCatalogUrl() {
@@ -574,26 +546,45 @@ export default function CatalogPreviewPage() {
       : []),
   ];
 
+  const productsPerPage: 1 | 2 | 4 =
+    catalog?.products_per_page === 1 ||
+    catalog?.products_per_page === 4
+      ? catalog.products_per_page
+      : 2;
+
   const catalogSectionsWithPages = catalogSections.reduce<
     Array<{
       group: CatalogGroup;
       products: CatalogProductView[];
       startPage: number;
       endPage: number;
+      productPages: CatalogProductView[][];
     }>
   >((acc, section) => {
+    const productPages: CatalogProductView[][] = [];
+
+    for (let index = 0; index < section.products.length; index += productsPerPage) {
+      productPages.push(section.products.slice(index, index + productsPerPage));
+    }
+
     const previous = acc[acc.length - 1];
     const startPage = previous ? previous.endPage + 1 : 3;
-    const endPage = startPage + section.products.length - 1;
+    const endPage = startPage + Math.max(productPages.length, 1) - 1;
 
     acc.push({
       ...section,
+      productPages,
       startPage,
       endPage,
     });
 
     return acc;
   }, []);
+
+  const totalProductPages = catalogSectionsWithPages.reduce(
+    (total, section) => total + section.productPages.length,
+    0
+  );
 
   function responseProduct(
     item: CatalogResponseItem
@@ -896,8 +887,10 @@ export default function CatalogPreviewPage() {
                                 <div className="response-product-thumb">
                                   {productImage ? (
                                     <img
-                                      src={productImage.image_url}
+                                      src={getOptimizedCatalogImageUrl(productImage.image_url, 220, 70)}
                                       alt={product?.name || "Produto"}
+                                      loading="lazy"
+                                      decoding="async"
                                     />
                                   ) : (
                                     <span>Sem foto</span>
@@ -1050,8 +1043,9 @@ export default function CatalogPreviewPage() {
                       <div className="response-print-product-thumb">
                         {productImage ? (
                           <img
-                            src={productImage.image_url}
+                            src={getOptimizedCatalogImageUrl(productImage.image_url, 260, 74)}
                             alt={product?.name || "Produto"}
+                            decoding="async"
                           />
                         ) : (
                           <span>Sem foto</span>
@@ -1154,6 +1148,10 @@ export default function CatalogPreviewPage() {
                   <strong>{catalogSectionsWithPages.length}</strong>
                   <span>grupos comerciais</span>
                 </div>
+                <div>
+                  <strong>{productsPerPage}</strong>
+                  <span>{productsPerPage === 1 ? "produto por página" : "produtos por página"}</span>
+                </div>
               </div>
 
               {(catalog.client_company || catalog.client_name || catalog.valid_until) && (
@@ -1222,212 +1220,402 @@ export default function CatalogPreviewPage() {
           </div>
         </section>
 
-        {catalogSectionsWithPages.flatMap((section) => section.products).map((product, index) => {
-          const front = getImage(product.id, "front");
-          const catalogGroup = getCatalogGroup(product);
-          const commercialPrices = getVisibleCommercialPrices(product);
-          const catalogImages = getCatalogImages(product.id);
-          const secondaryImages = catalogImages.filter(
-            ({ image }) => image.id !== front?.id
-          );
-          const productVariants = getProductVariants(product.id);
-          const visibility = {
-            sku: product.commercial_visibility?.sku ?? true,
-            barcode: product.commercial_visibility?.barcode ?? true,
-            description: product.commercial_visibility?.description ?? true,
-            material: product.commercial_visibility?.material ?? true,
-            dimensions: product.commercial_visibility?.dimensions ?? true,
-            weight: product.commercial_visibility?.weight ?? true,
-            package: product.commercial_visibility?.package ?? true,
-            specifications:
-              product.commercial_visibility?.specifications ?? true,
-            variants: product.commercial_visibility?.variants ?? true,
-            price: product.commercial_visibility?.price ?? true,
-          };
+        {catalogSectionsWithPages.flatMap((section) =>
+          section.productPages.map((pageProducts, pageIndex) => {
+            const pageNumber = section.startPage + pageIndex;
 
-          const specs = [
-            visibility.material && product.material
-              ? ["Material", product.material]
-              : null,
-            visibility.dimensions && product.width_cm !== null
-              ? ["Largura", `${product.width_cm} cm`]
-              : null,
-            visibility.dimensions && product.height_cm !== null
-              ? ["Altura", `${product.height_cm} cm`]
-              : null,
-            visibility.dimensions && product.depth_cm !== null
-              ? ["Profundidade", `${product.depth_cm} cm`]
-              : null,
-            visibility.weight && product.weight_g !== null
-              ? ["Peso", `${product.weight_g} g`]
-              : null,
-            visibility.package && product.package_quantity
-              ? [
-                  "Embalagem",
-                  `${product.package_quantity} ${product.package_unit || "UNIDADE"}`,
-                ]
-              : null,
-          ].filter((item): item is string[] => Boolean(item));
+            if (productsPerPage === 1) {
+              const product = pageProducts[0];
+              if (!product) return null;
 
-          return (
-            <section className="product-page print-page" key={product.id}>
-              <header className="product-page-header">
-                <Image
-                  src="/brand/camel-colorido.svg"
-                  alt="Camel Paper"
-                  width={150}
-                  height={60}
-                />
+              const front = getImage(product.id, "front");
+              const catalogGroup = getCatalogGroup(product);
+              const commercialPrices = getVisibleCommercialPrices(product);
+              const catalogImages = getCatalogImages(product.id);
+              const secondaryImages = catalogImages.filter(
+                ({ image }) => image.id !== front?.id
+              );
+              const productVariants = getProductVariants(product.id);
+              const visibility = {
+                sku: product.commercial_visibility?.sku ?? true,
+                barcode: product.commercial_visibility?.barcode ?? true,
+                description: product.commercial_visibility?.description ?? true,
+                material: product.commercial_visibility?.material ?? true,
+                dimensions: product.commercial_visibility?.dimensions ?? true,
+                weight: product.commercial_visibility?.weight ?? true,
+                package: product.commercial_visibility?.package ?? true,
+                specifications:
+                  product.commercial_visibility?.specifications ?? true,
+                variants: product.commercial_visibility?.variants ?? true,
+                price: product.commercial_visibility?.price ?? true,
+              };
 
-                <span>{String(index + 1).padStart(2, "0")}</span>
-              </header>
+              const specs = [
+                visibility.material && product.material
+                  ? ["Material", product.material]
+                  : null,
+                visibility.dimensions && product.width_cm !== null
+                  ? ["Largura", `${product.width_cm} cm`]
+                  : null,
+                visibility.dimensions && product.height_cm !== null
+                  ? ["Altura", `${product.height_cm} cm`]
+                  : null,
+                visibility.dimensions && product.depth_cm !== null
+                  ? ["Profundidade", `${product.depth_cm} cm`]
+                  : null,
+                visibility.weight && product.weight_g !== null
+                  ? ["Peso", `${product.weight_g} g`]
+                  : null,
+                visibility.package && product.package_quantity
+                  ? [
+                      "Embalagem",
+                      `${product.package_quantity} ${product.package_unit || "UNIDADE"}`,
+                    ]
+                  : null,
+              ].filter((item): item is string[] => Boolean(item));
 
-              <div className="product-layout">
-                <div className="product-gallery">
-                  <div className="product-main-image">
-                    {front ? (
-                      <img src={getOptimizedCatalogImageUrl(front.image_url, 900, 78)} alt={product.name} />
-                    ) : (
-                      <div className="image-empty">Imagem profissional em preparação</div>
-                    )}
-                    <span className="image-label">Foto principal</span>
+              return (
+                <section className="product-page print-page density-1" key={`${section.group.id}-${pageIndex}`}>
+                  <header className="product-page-header">
+                    <Image
+                      src="/brand/camel-colorido.svg"
+                      alt="Camel Paper"
+                      width={150}
+                      height={60}
+                    />
+                    <span>{String(pageNumber).padStart(2, "0")}</span>
+                  </header>
+
+                  <div className="product-layout">
+                    <div
+                      className={`product-gallery ${secondaryImages.length > 0 ? "has-secondary" : ""}`}
+                    >
+                      <div className="product-main-image">
+                        {front ? (
+                          <img
+                            src={getOptimizedCatalogImageUrl(front.image_url, 900, 78)}
+                            alt={product.name}
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        ) : (
+                          <div className="image-empty">Imagem profissional em preparação</div>
+                        )}
+                        <span className="image-label">Foto principal</span>
+                      </div>
+
+                      {secondaryImages.length > 0 && (
+                        <div className="product-gallery-secondary">
+                          <div className="product-gallery-secondary-head">
+                            <span>OUTRAS FOTOS DO PRODUTO</span>
+                            <small>
+                              {secondaryImages.length} foto{secondaryImages.length === 1 ? "" : "s"}
+                            </small>
+                          </div>
+
+                          <div className="product-thumbnails">
+                            {secondaryImages.slice(0, 4).map(({ label, image }) => (
+                              <div className="thumbnail-card" key={image.id}>
+                                <img
+                                  src={getOptimizedCatalogImageUrl(image.image_url, 320, 76)}
+                                  alt={`${label} de ${product.name}`}
+                                  loading="lazy"
+                                  decoding="async"
+                                />
+                                <span>{label}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="product-info">
+                      <span className="section-eyebrow">
+                        {catalogGroup?.name || "PRODUTO CAMEL PAPER"}
+                      </span>
+                      <h2>{product.name}</h2>
+
+                      {visibility.price && commercialPrices.length > 0 && (
+                        <div className={`catalog-prices ${commercialPrices.length === 1 ? "single" : ""}`}>
+                          {commercialPrices.map((price) => (
+                            <div className="catalog-price" key={price.key}>
+                              <span>{price.label}</span>
+                              <strong>{formatMoney(price.value)}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="codes">
+                        {visibility.sku && product.sku && (
+                          <div>
+                            <span>SKU</span>
+                            <strong>{product.sku}</strong>
+                          </div>
+                        )}
+                        {visibility.barcode && product.barcode && (
+                          <div>
+                            <span>EAN</span>
+                            <strong>{product.barcode}</strong>
+                          </div>
+                        )}
+                      </div>
+
+                      {visibility.description && product.description && (
+                        <div className="copy-block catalog-summary">
+                          <h3>Sobre o produto</h3>
+                          <p>{getCatalogSummary(product.description)}</p>
+                        </div>
+                      )}
+
+                      {product.commercial_highlights && (
+                        <div className="highlight-block">
+                          <span>DESTAQUES</span>
+                          <p>{product.commercial_highlights}</p>
+                        </div>
+                      )}
+
+                      {specs.length > 0 && (
+                        <div className="spec-grid">
+                          {specs.map(([label, value]) => (
+                            <div key={label}>
+                              <span>{label}</span>
+                              <strong>{value}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {visibility.variants && productVariants.length > 0 && (
+                        <div className="catalog-variants-block">
+                          <div className="catalog-variants-heading">
+                            <div>
+                              <span>VARIAÇÕES DISPONÍVEIS</span>
+                              <h3>{productVariants.length} {productVariants.length === 1 ? "opção" : "opções"}</h3>
+                            </div>
+                            <small>Fotos somente quando cadastradas na própria variação</small>
+                          </div>
+
+                          <div className="catalog-variants-grid">
+                            {productVariants.map((variant) => {
+                              const variantImage = getVariantImage(product.id, variant.id);
+                              const variantPrice =
+                                variant.sale_price ?? getCommercialPrice(product, "package");
+
+                              return (
+                                <div
+                                  className={`catalog-variant-card ${variantImage ? "has-image" : "text-only"}`}
+                                  key={variant.id}
+                                >
+                                  {variantImage && (
+                                    <div className="catalog-variant-image">
+                                      <img
+                                        src={getOptimizedCatalogImageUrl(variantImage.image_url, 560, 84)}
+                                        alt={`${product.name} - ${variant.name}`}
+                                        loading="lazy"
+                                        decoding="async"
+                                      />
+                                    </div>
+                                  )}
+
+                                  <div className="catalog-variant-copy">
+                                    <strong>{variant.name}</strong>
+                                    {variant.color && variant.color !== variant.name && (
+                                      <small>{variant.color}</small>
+                                    )}
+                                    {visibility.sku && variant.sku && (
+                                      <small>SKU: {variant.sku}</small>
+                                    )}
+                                    {visibility.barcode && variant.barcode && (
+                                      <small>EAN: {variant.barcode}</small>
+                                    )}
+                                    {visibility.price && variantPrice !== null && (
+                                      <b>{formatMoney(variantPrice)}</b>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {visibility.variants &&
+                        productVariants.length === 0 &&
+                        product.commercial_variants && (
+                          <div className="copy-block">
+                            <h3>Cores e variações</h3>
+                            <p>{product.commercial_variants}</p>
+                          </div>
+                        )}
+
+                      {visibility.specifications && product.specifications && (
+                        <div className="copy-block compact">
+                          <h3>Informações adicionais</h3>
+                          <p>{product.specifications}</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
+                </section>
+              );
+            }
 
-                  {secondaryImages.length > 0 && (
-                    <div className="product-thumbnails">
-                      {secondaryImages.slice(0, 3).map(({ label, image }) => (
-                        <div className="thumbnail-card" key={image.id}>
-                          <img src={getOptimizedCatalogImageUrl(image.image_url, 280, 74)} alt={`${label} de ${product.name}`} />
-                          <span>{label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="product-info">
-                  <span className="section-eyebrow">
-                    {catalogGroup?.name || "PRODUTO CAMEL PAPER"}
-                  </span>
-                  <h2>{product.name}</h2>
-
-                  {visibility.price && commercialPrices.length > 0 && (
-                    <div className={`catalog-prices ${commercialPrices.length === 1 ? "single" : ""}`}>
-                      {commercialPrices.map((price) => (
-                        <div className="catalog-price" key={price.key}>
-                          <span>{price.label}</span>
-                          <strong>{formatMoney(price.value)}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="codes">
-                    {visibility.sku && product.sku && (
-                      <div>
-                        <span>SKU</span>
-                        <strong>{product.sku}</strong>
-                      </div>
-                    )}
-
-                    {visibility.barcode && product.barcode && (
-                      <div>
-                        <span>EAN</span>
-                        <strong>{product.barcode}</strong>
-                      </div>
-                    )}
+            return (
+              <section
+                className={`catalog-grid-page print-page density-${productsPerPage}`}
+                key={`${section.group.id}-${pageIndex}`}
+              >
+                <header className="grid-page-header">
+                  <Image
+                    src="/brand/camel-colorido.svg"
+                    alt="Camel Paper"
+                    width={138}
+                    height={54}
+                  />
+                  <div>
+                    <strong>{section.group.name}</strong>
+                    <span>Página {pageNumber}</span>
                   </div>
+                </header>
 
-                  {visibility.description && product.description && (
-                    <div className="copy-block catalog-summary">
-                      <h3>Sobre o produto</h3>
-                      <p>{getCatalogSummary(product.description)}</p>
-                    </div>
-                  )}
+                <div className="compact-products-grid">
+                  {pageProducts.map((product) => {
+                    const front = getImage(product.id, "front");
+                    const commercialPrices = getVisibleCommercialPrices(product);
+                    const productVariants = getProductVariants(product.id);
+                    const visibility = {
+                      sku: product.commercial_visibility?.sku ?? true,
+                      barcode: product.commercial_visibility?.barcode ?? true,
+                      description: product.commercial_visibility?.description ?? true,
+                      package: product.commercial_visibility?.package ?? true,
+                      price: product.commercial_visibility?.price ?? true,
+                      variants: product.commercial_visibility?.variants ?? true,
+                    };
 
-                  {product.commercial_highlights && (
-                    <div className="highlight-block">
-                      <span>DESTAQUES</span>
-                      <p>{product.commercial_highlights}</p>
-                    </div>
-                  )}
+                    const compactDescription = getCatalogSummary(
+                      product.description,
+                      productsPerPage === 2 ? 105 : 58
+                    );
 
-                  {specs.length > 0 && (
-                    <div className="spec-grid">
-                      {specs.map(([label, value]) => (
-                        <div key={label}>
-                          <span>{label}</span>
-                          <strong>{value}</strong>
+                    return (
+                      <article className="compact-product-card" key={product.id}>
+                        <div className="compact-image-wrap">
+                          {front ? (
+                            <img
+                              src={getOptimizedCatalogImageUrl(
+                                front.image_url,
+                                productsPerPage === 2 ? 620 : 420,
+                                productsPerPage === 2 ? 76 : 72
+                              )}
+                              alt={product.name}
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          ) : (
+                            <div className="compact-image-empty">Sem foto</div>
+                          )}
                         </div>
-                      ))}
-                    </div>
-                  )}
 
-                  {visibility.variants && productVariants.length > 0 && (
-                    <div className="catalog-variants-block">
-                      <div className="catalog-variants-heading">
-                        <div>
-                          <span>VARIAÇÕES DISPONÍVEIS</span>
-                          <h3>{productVariants.length} {productVariants.length === 1 ? "opção" : "opções"}</h3>
-                        </div>
-                        <small>Fotos profissionais de cada variação</small>
-                      </div>
+                        <div className="compact-product-copy">
+                          <span className="compact-group">{section.group.name}</span>
+                          <h2>{product.name}</h2>
 
-                      <div className="catalog-variants-grid">
-                        {productVariants.map((variant) => {
-                          const variantImage = getVariantImage(product.id, variant.id);
-                          const variantPrice = variant.sale_price ?? getCommercialPrice(product, "package");
+                          <div className="compact-codes">
+                            {visibility.sku && product.sku && (
+                              <span><b>SKU</b> {product.sku}</span>
+                            )}
+                            {visibility.barcode && product.barcode && (
+                              <span><b>EAN</b> {product.barcode}</span>
+                            )}
+                          </div>
 
-                          return (
-                            <div className="catalog-variant-card" key={variant.id}>
-                              <div className="catalog-variant-image">
-                                {variantImage ? (
-                                  <img src={getOptimizedCatalogImageUrl(variantImage.image_url, 240, 74)} alt={`${product.name} - ${variant.name}`} />
-                                ) : (
-                                  <span>Sem foto</span>
-                                )}
+                          {visibility.price && commercialPrices.length > 0 && (
+                            <div className="compact-prices">
+                              {commercialPrices.slice(0, productsPerPage === 2 ? 3 : 2).map((price) => (
+                                <div key={price.key}>
+                                  <span>{price.label}</span>
+                                  <strong>{formatMoney(price.value)}</strong>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {visibility.package && product.package_quantity && (
+                            <div className="compact-package">
+                              <span>EMBALAGEM</span>
+                              <strong>
+                                {product.package_quantity} {product.package_unit || "UNIDADE"}
+                              </strong>
+                            </div>
+                          )}
+
+                          {productsPerPage === 2 &&
+                            visibility.description &&
+                            compactDescription && (
+                              <p className="compact-description">{compactDescription}</p>
+                            )}
+
+                          {visibility.variants && productVariants.length > 0 && (
+                            <div className="compact-variant-gallery">
+                              <div className="compact-variant-gallery-head">
+                                <span>VARIAÇÕES</span>
+                                <strong>{productVariants.length}</strong>
                               </div>
 
-                              <div className="catalog-variant-copy">
-                                <strong>{variant.name}</strong>
-                                {variant.color && variant.color !== variant.name && (
-                                  <small>{variant.color}</small>
-                                )}
-                                {visibility.sku && variant.sku && (
-                                  <small>SKU: {variant.sku}</small>
-                                )}
-                                {visibility.barcode && variant.barcode && (
-                                  <small>EAN: {variant.barcode}</small>
-                                )}
-                                {visibility.price && variantPrice !== null && (
-                                  <b>{formatMoney(variantPrice)}</b>
+                              <div className="compact-variant-thumbs">
+                                {productVariants.slice(0, 4).map((variant) => {
+                                  const variantImage = getVariantImage(product.id, variant.id);
+
+                                  return (
+                                    <div
+                                      className={`compact-variant-thumb ${variantImage ? "has-image" : "text-only"}`}
+                                      key={variant.id}
+                                    >
+                                      {variantImage ? (
+                                        <>
+                                          <div className="compact-variant-thumb-image">
+                                            <img
+                                              src={getOptimizedCatalogImageUrl(
+                                                variantImage.image_url,
+                                                productsPerPage === 2 ? 480 : 320,
+                                                82
+                                              )}
+                                              alt={`${product.name} - ${variant.name}`}
+                                              loading="lazy"
+                                              decoding="async"
+                                            />
+                                          </div>
+                                          <small title={variant.name}>{variant.name}</small>
+                                        </>
+                                      ) : (
+                                        <span className="compact-variant-text" title={variant.name}>
+                                          {variant.name}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+
+                                {productVariants.length > 4 && (
+                                  <div className="compact-variant-more">
+                                    <strong>+{productVariants.length - 4}</strong>
+                                    <span>variações</span>
+                                  </div>
                                 )}
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {visibility.variants && productVariants.length === 0 && product.commercial_variants && (
-                    <div className="copy-block">
-                      <h3>Cores e variações</h3>
-                      <p>{product.commercial_variants}</p>
-                    </div>
-                  )}
-
-                  {visibility.specifications && product.specifications && (
-                    <div className="copy-block compact">
-                      <h3>Informações adicionais</h3>
-                      <p>{product.specifications}</p>
-                    </div>
-                  )}
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
-              </div>
-            </section>
-          );
-        })}
+              </section>
+            );
+          })
+        )}
       </section>
 
       <style jsx>{`
@@ -2077,6 +2265,497 @@ export default function CatalogPreviewPage() {
           break-after: page;
         }
 
+        .catalog-grid-page {
+          padding: 12mm 13mm 11mm;
+          display: flex;
+          flex-direction: column;
+          gap: 5mm;
+        }
+
+        .grid-page-header {
+          min-height: 14mm;
+          padding-bottom: 4mm;
+          border-bottom: .35mm solid #eadfd9;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8mm;
+        }
+
+        .grid-page-header :global(img) {
+          width: 34mm !important;
+          height: auto !important;
+          object-fit: contain;
+        }
+
+        .grid-page-header > div {
+          min-width: 0;
+          display: flex;
+          align-items: flex-end;
+          gap: 4mm;
+        }
+
+        .grid-page-header strong {
+          max-width: 90mm;
+          color: #8a2a18;
+          font-size: 3.2mm;
+          line-height: 1.1;
+          text-align: right;
+        }
+
+        .grid-page-header span {
+          flex: 0 0 auto;
+          color: #a3958d;
+          font-size: 2.2mm;
+          font-weight: 800;
+        }
+
+        .compact-products-grid {
+          flex: 1;
+          min-height: 0;
+          display: grid;
+          gap: 5mm;
+        }
+
+        .density-2 .compact-products-grid {
+          grid-template-rows: repeat(2, minmax(0, 1fr));
+        }
+
+        .density-4 .compact-products-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-rows: repeat(2, minmax(0, 1fr));
+          gap: 4mm;
+        }
+
+        .compact-product-card {
+          min-height: 0;
+          overflow: hidden;
+          isolation: isolate;
+          border: .35mm solid #e7ddd7;
+          border-radius: 3.5mm;
+          background: #fff;
+          display: grid;
+          grid-template-columns: 43% minmax(0, 1fr);
+        }
+
+        .density-4 .compact-product-card {
+          grid-template-columns: 1fr;
+          grid-template-rows: 52% minmax(0, 48%);
+        }
+
+        .compact-image-wrap {
+          min-width: 0;
+          min-height: 0;
+          padding: 3mm;
+          background: #fff;
+          border-right: .3mm solid #eee6e1;
+          display: grid;
+          place-items: center;
+        }
+
+        .density-4 .compact-image-wrap {
+          border-right: 0;
+          border-bottom: .3mm solid #eee6e1;
+          padding: 3mm 3mm 2.4mm;
+          overflow: hidden;
+          background: #fff;
+        }
+
+        .compact-image-wrap img {
+          width: 100%;
+          height: 100%;
+          max-width: 100%;
+          max-height: 100%;
+          display: block;
+          object-fit: contain;
+          object-position: center;
+        }
+
+        .density-4 .compact-image-wrap img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          object-position: center;
+        }
+
+        .compact-image-empty {
+          width: 100%;
+          height: 100%;
+          display: grid;
+          place-items: center;
+          background: #faf7f5;
+          color: #a0928a;
+          font-size: 2.4mm;
+          font-weight: 800;
+        }
+
+        .compact-product-copy {
+          min-width: 0;
+          min-height: 0;
+          padding: 4mm;
+          display: flex;
+          flex-direction: column;
+        }
+
+        .density-4 .compact-product-copy {
+          min-height: 0;
+          overflow: hidden;
+          padding: 2.4mm 3mm 2.6mm;
+          background: #fff;
+        }
+
+        .compact-group {
+          color: #ef7a00;
+          font-size: 2mm;
+          font-weight: 900;
+          letter-spacing: .18mm;
+          text-transform: uppercase;
+        }
+
+        .density-4 .compact-group {
+          font-size: 1.55mm;
+          letter-spacing: .12mm;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .compact-product-copy h2 {
+          margin: 1.4mm 0 0;
+          color: #342720;
+          font-size: 5.2mm;
+          line-height: 1.03;
+          letter-spacing: -.18mm;
+        }
+
+        .density-4 .compact-product-copy h2 {
+          margin: .7mm 0 0;
+          font-size: 3.15mm;
+          line-height: 1.08;
+          letter-spacing: -.08mm;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+
+        .compact-codes {
+          margin-top: 2mm;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 1.5mm 4mm;
+          color: #796c65;
+          font-size: 2.25mm;
+        }
+
+        .density-4 .compact-codes {
+          margin-top: .8mm;
+          gap: .7mm 2mm;
+          font-size: 1.65mm;
+          line-height: 1.15;
+        }
+
+        .compact-codes b {
+          color: #9a8d86;
+          font-size: .9em;
+          letter-spacing: .12mm;
+        }
+
+        .compact-prices {
+          margin-top: 2.8mm;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 1.5mm;
+        }
+
+        .density-4 .compact-prices {
+          margin-top: 1.1mm;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: .8mm;
+        }
+
+        .compact-prices > div {
+          min-width: 0;
+          padding: 1.8mm 2mm;
+          border-radius: 2mm;
+          background: #fff5ec;
+          display: flex;
+          flex-direction: column;
+          gap: .5mm;
+        }
+
+        .density-4 .compact-prices > div {
+          padding: .9mm 1.2mm;
+          border-radius: 1.5mm;
+        }
+
+        .compact-prices span,
+        .compact-package span,
+        .compact-variants span {
+          color: #a86a43;
+          font-size: 1.65mm;
+          font-weight: 900;
+          letter-spacing: .12mm;
+        }
+
+        .compact-prices strong {
+          min-width: 0;
+          color: #8a2a18;
+          font-size: 3.5mm;
+          line-height: 1;
+          white-space: nowrap;
+        }
+
+        .density-4 .compact-prices strong {
+          font-size: 2.65mm;
+        }
+
+        .compact-package {
+          margin-top: 2.4mm;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 3mm;
+          padding-top: 2mm;
+          border-top: .25mm solid #eee5df;
+        }
+
+        .density-4 .compact-package {
+          margin-top: 1mm;
+          padding-top: .9mm;
+        }
+
+        .compact-package strong {
+          color: #4b3a32;
+          font-size: 2.5mm;
+        }
+
+        .density-4 .compact-package strong {
+          font-size: 1.85mm;
+          white-space: nowrap;
+        }
+
+        .compact-description {
+          margin: 2.3mm 0 0;
+          color: #746760;
+          font-size: 2.35mm;
+          line-height: 1.38;
+        }
+
+        .density-4 .compact-description {
+          display: none;
+        }
+
+        .compact-variant-gallery {
+          margin-top: auto;
+          padding-top: 2mm;
+          border-top: .25mm solid #eee5df;
+          display: flex;
+          flex-direction: column;
+          gap: 1.3mm;
+          min-height: 0;
+        }
+
+        .compact-variant-gallery-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 2mm;
+        }
+
+        .compact-variant-gallery-head > span {
+          color: #a86a43;
+          font-size: 1.65mm;
+          font-weight: 900;
+          letter-spacing: .12mm;
+        }
+
+        .compact-variant-gallery-head > strong {
+          min-width: 4.5mm;
+          height: 4.5mm;
+          padding: 0 1.2mm;
+          border-radius: 999px;
+          background: #fff3e8;
+          color: #8a2a18;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1.8mm;
+          line-height: 1;
+        }
+
+        .compact-variant-thumbs {
+          min-height: 0;
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 1.8mm;
+        }
+
+        .compact-variant-thumb,
+        .compact-variant-more {
+          min-width: 0;
+          overflow: hidden;
+          border: .25mm solid #eadfd9;
+          border-radius: 1.8mm;
+          background: #fff;
+        }
+
+        .compact-variant-thumb {
+          display: grid;
+          grid-template-rows: 25mm auto;
+        }
+
+        .compact-variant-thumb-image {
+          min-width: 0;
+          min-height: 0;
+          padding: 1mm;
+          display: grid;
+          place-items: center;
+          background: #faf8f6;
+          border-bottom: .2mm solid #eee6e1;
+        }
+
+
+        .compact-variant-thumb.text-only {
+          min-height: 20mm;
+          display: grid;
+          place-items: center;
+          padding: 2mm 2.5mm;
+          border: 0.25mm solid #efc7a6;
+          border-radius: 2.4mm;
+          background: #fff8f2;
+        }
+
+        .compact-variant-thumb.text-only .compact-variant-text {
+          color: #8a2a18;
+          font-size: 2.35mm;
+          line-height: 1.15;
+          font-weight: 900;
+          text-align: center;
+          overflow-wrap: anywhere;
+        }
+        .compact-variant-thumb-image img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          object-position: center;
+          display: block;
+        }
+
+        .compact-variant-thumb-image span {
+          color: #aa9b94;
+          font-size: 1.55mm;
+          font-weight: 800;
+        }
+
+        .compact-variant-thumb small {
+          min-width: 0;
+          padding: 1mm .8mm;
+          color: #66564e;
+          font-size: 1.85mm;
+          line-height: 1.1;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          text-align: center;
+        }
+
+        .compact-variant-more {
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: .4mm;
+          background: #fff5ec;
+          color: #8a2a18;
+          text-align: center;
+        }
+
+        .compact-variant-more strong {
+          font-size: 3mm;
+          line-height: 1;
+        }
+
+        .compact-variant-more span {
+          color: #a86a43;
+          font-size: 1.35mm;
+          font-weight: 800;
+        }
+
+        .density-4 .compact-variant-gallery {
+          padding-top: .8mm;
+          gap: .7mm;
+        }
+
+        .density-4 .compact-variant-gallery-head > span {
+          font-size: 1.35mm;
+        }
+
+        .density-4 .compact-variant-gallery-head > strong {
+          min-width: 3.7mm;
+          height: 3.7mm;
+          font-size: 1.5mm;
+        }
+
+        .density-4 .compact-variant-thumbs {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: .9mm;
+        }
+
+        .density-4 .compact-variant-thumb {
+          grid-template-rows: 14mm auto;
+          border-radius: 1.3mm;
+        }
+
+        .density-4 .compact-variant-thumb-image {
+          padding: .45mm;
+        }
+
+        .density-4 .compact-variant-thumb small {
+          padding: .45mm .35mm;
+          font-size: 1.35mm;
+        }
+
+        .density-4 .compact-variant-more strong {
+          font-size: 2.4mm;
+        }
+
+        .density-4 .compact-variant-more span {
+          font-size: 1.05mm;
+        }
+
+        .compact-variants {
+          margin-top: auto;
+          padding-top: 2mm;
+          display: flex;
+          flex-direction: column;
+          gap: .7mm;
+        }
+
+        .density-4 .compact-variants {
+          margin-top: auto;
+          padding-top: .8mm;
+          min-height: 0;
+        }
+
+        .compact-variants strong {
+          color: #65564f;
+          font-size: 2.15mm;
+          line-height: 1.3;
+          font-weight: 700;
+        }
+
+        .density-4 .compact-variants strong {
+          font-size: 1.65mm;
+          line-height: 1.18;
+          white-space: normal;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+
         .cover-page {
           position: relative;
           overflow: hidden;
@@ -2469,7 +3148,7 @@ export default function CatalogPreviewPage() {
 
         .product-main-image {
           position: relative;
-          height: 145mm;
+          height: 118mm;
           border: 0.25mm solid #eadfd9;
           border-radius: 5mm;
           background: radial-gradient(circle at 50% 42%, #fff 0%, #fff 58%, #fbf7f3 100%);
@@ -2486,6 +3165,14 @@ export default function CatalogPreviewPage() {
           box-sizing: border-box;
         }
 
+        .product-gallery.has-secondary .product-main-image {
+          height: 76mm;
+        }
+
+        .product-gallery.has-secondary .product-main-image > img {
+          padding: 5mm;
+        }
+
         .image-label {
           position: absolute;
           left: 5mm;
@@ -2500,21 +3187,47 @@ export default function CatalogPreviewPage() {
           text-transform: uppercase;
         }
 
-        .product-thumbnails {
+        .product-gallery-secondary {
           margin-top: 4mm;
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          padding-top: 3mm;
+          border-top: 0.25mm solid #eadfd9;
+        }
+
+        .product-gallery-secondary-head {
+          margin-bottom: 1.8mm;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
           gap: 3mm;
         }
 
+        .product-gallery-secondary-head span {
+          color: #ef7a00;
+          font-size: 2mm;
+          font-weight: 900;
+          letter-spacing: 0.35mm;
+        }
+
+        .product-gallery-secondary-head small {
+          color: #9a8d86;
+          font-size: 1.9mm;
+          font-weight: 800;
+        }
+
+        .product-thumbnails {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 2.5mm;
+        }
+
         .thumbnail-card {
-          height: 42mm;
+          height: 26mm;
           overflow: hidden;
           border: 0.25mm solid #eadfd9;
-          border-radius: 3.5mm;
+          border-radius: 3mm;
           background: #fff;
           display: grid;
-          grid-template-rows: 1fr 9mm;
+          grid-template-rows: 1fr 6.5mm;
         }
 
         .thumbnail-card img {
@@ -2522,7 +3235,7 @@ export default function CatalogPreviewPage() {
           height: 100%;
           min-height: 0;
           object-fit: contain;
-          padding: 3mm;
+          padding: 2.2mm;
           box-sizing: border-box;
         }
 
@@ -2532,7 +3245,7 @@ export default function CatalogPreviewPage() {
           place-items: center;
           color: #7a6b64;
           background: #fcfaf8;
-          font-size: 2.3mm;
+          font-size: 2mm;
           font-weight: 900;
           text-transform: uppercase;
         }
@@ -2729,15 +3442,28 @@ export default function CatalogPreviewPage() {
           border-radius: 2.8mm;
           background: #fcfaf8;
           display: grid;
-          grid-template-columns: 15mm minmax(0, 1fr);
+          grid-template-columns: 30mm minmax(0, 1fr);
           gap: 2.5mm;
           align-items: center;
           break-inside: avoid;
         }
 
+        .catalog-variant-card.text-only {
+          grid-template-columns: 1fr;
+          min-height: 13mm;
+          padding: 2.4mm 3mm;
+          border-color: #efc7a6;
+          background: #fff8f2;
+        }
+
+        .catalog-variant-card.text-only .catalog-variant-copy strong {
+          color: #8a2a18;
+          font-size: 3.1mm;
+        }
+
         .catalog-variant-image {
-          width: 15mm;
-          height: 15mm;
+          width: 30mm;
+          height: 30mm;
           border-radius: 2mm;
           overflow: hidden;
           background: #fff;
@@ -2816,6 +3542,17 @@ export default function CatalogPreviewPage() {
             width: auto;
             margin: 0;
             box-shadow: none;
+          }
+
+          .catalog-grid-page {
+            padding: 12mm 13mm 11mm !important;
+          }
+
+          .catalog-grid-page,
+          .compact-product-card,
+          .compact-products-grid {
+            page-break-inside: avoid !important;
+            break-inside: avoid-page !important;
           }
 
           .print-page {

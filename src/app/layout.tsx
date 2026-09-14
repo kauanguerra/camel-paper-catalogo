@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 
 export const metadata: Metadata = {
   title: {
@@ -8,6 +9,12 @@ export const metadata: Metadata = {
   },
   description: "Catálogo interno e comercial de produtos Camel Paper",
   applicationName: "Camel Paper Catálogo",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "Camel Paper Catálogo",
+    statusBarStyle: "default",
+  },
 };
 
 export const viewport: Viewport = {
@@ -22,7 +29,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-BR">
-      <body>{children}</body>
+      <body>
+        {children}
+        <ServiceWorkerRegister />
+      </body>
     </html>
   );
 }

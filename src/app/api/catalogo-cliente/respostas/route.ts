@@ -1,11 +1,60 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { resolveProductImage, type ResolvableProductImage } from "@/lib/resolve-product-image";
 
 type RequestItem = {
   catalog_product_id?: string;
   product_id?: string;
   variant_id?: string | null;
   quantity?: number;
+};
+
+type CatalogProductRow = {
+  id: string;
+  catalog_id: string;
+  product_id: string;
+  custom_price: number | null;
+  products:
+    | {
+        id: string;
+        name: string;
+        sku: string | null;
+        barcode: string | null;
+        internal_code: string | null;
+        main_image_url: string | null;
+        sale_price: number | null;
+        unit_price: number | null;
+        active: boolean;
+        has_variants: boolean;
+      }
+    | Array<{
+        id: string;
+        name: string;
+        sku: string | null;
+        barcode: string | null;
+        internal_code: string | null;
+        main_image_url: string | null;
+        sale_price: number | null;
+        unit_price: number | null;
+        active: boolean;
+        has_variants: boolean;
+      }>
+    | null;
+};
+
+type VariantRow = {
+  id: string;
+  product_id: string;
+  name: string;
+  sku: string | null;
+  barcode: string | null;
+  image_url: string | null;
+  sale_price: number | null;
+  active: boolean;
+};
+
+type ProductImageRow = ResolvableProductImage & {
+  id: string;
 };
 
 function getTodayInSaoPaulo() {
@@ -15,6 +64,10 @@ function getTodayInSaoPaulo() {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+}
+
+function cleanText(value: unknown, max: number) {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
 export async function POST(request: Request) {
@@ -38,7 +91,8 @@ export async function POST(request: Request) {
     });
 
     const body = await request.json();
-    const token = typeof body?.token === "string" ? body.token.trim() : "";
+
+    const token = cleanText(body?.token, 100);
     const requestedItems: RequestItem[] = Array.isArray(body?.items)
       ? body.items
       : [];
@@ -83,25 +137,10 @@ export async function POST(request: Request) {
       );
     }
 
-    const customerName =
-      typeof body?.customer_name === "string"
-        ? body.customer_name.trim().slice(0, 200)
-        : "";
-
-    const customerCompany =
-      typeof body?.customer_company === "string"
-        ? body.customer_company.trim().slice(0, 200)
-        : "";
-
-    const customerContact =
-      typeof body?.customer_contact === "string"
-        ? body.customer_contact.trim().slice(0, 300)
-        : "";
-
-    const message =
-      typeof body?.message === "string"
-        ? body.message.trim().slice(0, 3000)
-        : "";
+    const customerName = cleanText(body?.customer_name, 200);
+    const customerCompany = cleanText(body?.customer_company, 200);
+    const customerContact = cleanText(body?.customer_contact, 300);
+    const message = cleanText(body?.message, 3000);
 
     if (!customerName && !customerCompany) {
       return NextResponse.json(
@@ -112,7 +151,7 @@ export async function POST(request: Request) {
 
     const { data: catalog, error: catalogError } = await admin
       .from("catalogs")
-      .select("id, share_enabled, valid_until")
+      .select("id, share_enabled, valid_until, created_by")
       .eq("share_token", token)
       .eq("share_enabled", true)
       .maybeSingle();
@@ -139,10 +178,22 @@ export async function POST(request: Request) {
       );
     }
 
-    // IMPORTANTE:
-    // Várias variações do mesmo produto compartilham o MESMO catalog_product_id.
-    // Por isso usamos IDs únicos apenas para buscar os produtos do catálogo,
-    // sem exigir que a quantidade de IDs únicos seja igual à quantidade de itens.
+    let catalogSellerName: string | null = null;
+
+    if (catalog.created_by) {
+      const { data: catalogSeller, error: catalogSellerError } = await admin
+        .from("profiles")
+        .select("name")
+        .eq("id", catalog.created_by)
+        .maybeSingle();
+
+      if (catalogSellerError) {
+        console.error("Catalog seller lookup failed:", catalogSellerError);
+      } else {
+        catalogSellerName = catalogSeller?.name || null;
+      }
+    }
+
     const catalogProductIds = [
       ...new Set(
         requestedItems.map(
@@ -161,8 +212,15 @@ export async function POST(request: Request) {
           custom_price,
           products (
             id,
+            name,
+            sku,
+            barcode,
+            internal_code,
+            main_image_url,
             sale_price,
-            active
+            unit_price,
+            active,
+            has_variants
           )
         `
       )
@@ -196,17 +254,14 @@ export async function POST(request: Request) {
       ),
     ];
 
-    let variants: Array<{
-      id: string;
-      product_id: string;
-      sale_price: number | null;
-      active: boolean;
-    }> = [];
+    let variants: VariantRow[] = [];
 
     if (variantIds.length > 0) {
       const { data: variantRows, error: variantsError } = await admin
         .from("product_variants")
-        .select("id, product_id, sale_price, active")
+        .select(
+          "id, product_id, name, sku, barcode, image_url, sale_price, active"
+        )
         .in("id", variantIds)
         .eq("active", true);
 
@@ -218,7 +273,7 @@ export async function POST(request: Request) {
         );
       }
 
-      variants = (variantRows || []) as typeof variants;
+      variants = (variantRows || []) as VariantRow[];
 
       if (variants.length !== variantIds.length) {
         return NextResponse.json(
@@ -228,8 +283,41 @@ export async function POST(request: Request) {
       }
     }
 
+    // Fonte única para snapshots de imagem:
+    // carrega todas as imagens dos produtos selecionados e resolve produto/variação
+    // pela mesma regra de prioridade usada em todo o sistema.
+    const selectedProductIds = [
+      ...new Set(
+        ((catalogProducts || []) as CatalogProductRow[]).map((row) => row.product_id)
+      ),
+    ];
+
+    let productImages: ProductImageRow[] = [];
+
+    if (selectedProductIds.length > 0) {
+      const { data: productImageRows, error: productImagesError } = await admin
+        .from("product_images")
+        .select(
+          "id, product_id, variant_id, image_url, image_type, catalog_slot, is_primary, approved, source"
+        )
+        .in("product_id", selectedProductIds);
+
+      if (productImagesError) {
+        console.error("Product images lookup failed:", productImagesError);
+        return NextResponse.json(
+          { error: "Não foi possível carregar as imagens dos produtos selecionados." },
+          { status: 500 }
+        );
+      }
+
+      productImages = (productImageRows || []) as ProductImageRow[];
+    }
+
     const catalogProductMap = new Map(
-      (catalogProducts || []).map((row: any) => [row.id, row])
+      ((catalogProducts || []) as CatalogProductRow[]).map((row) => [
+        row.id,
+        row,
+      ])
     );
 
     const variantMap = new Map(
@@ -242,13 +330,9 @@ export async function POST(request: Request) {
       ).trim();
 
       const productId = (requestedItem.product_id as string).trim();
-
       const catalogProduct = catalogProductMap.get(catalogProductId);
 
-      if (!catalogProduct) {
-        throw new Error("CATALOG_PRODUCT_INVALID");
-      }
-
+      if (!catalogProduct) throw new Error("CATALOG_PRODUCT_INVALID");
       if (productId !== catalogProduct.product_id) {
         throw new Error("PRODUCT_MISMATCH");
       }
@@ -275,42 +359,44 @@ export async function POST(request: Request) {
         catalogProduct.custom_price !== null &&
         catalogProduct.custom_price !== undefined
           ? Number(catalogProduct.custom_price)
-          : Number(product.sale_price || 0);
+          : Number(product.sale_price ?? product.unit_price ?? 0);
 
       let unitPrice = basePrice;
       let variantId: string | null = null;
+      let variant: VariantRow | null = null;
 
       if (
         typeof requestedItem.variant_id === "string" &&
         requestedItem.variant_id.trim()
       ) {
         const requestedVariantId = requestedItem.variant_id.trim();
-        const variant = variantMap.get(requestedVariantId);
+        const foundVariant = variantMap.get(requestedVariantId);
 
         if (
-          !variant ||
-          variant.product_id !== catalogProduct.product_id
+          !foundVariant ||
+          foundVariant.product_id !== catalogProduct.product_id
         ) {
           throw new Error("VARIANT_MISMATCH");
         }
 
-        variantId = variant.id;
+        variant = foundVariant;
+        variantId = foundVariant.id;
 
         if (
-          variant.sale_price !== null &&
-          variant.sale_price !== undefined
+          foundVariant.sale_price !== null &&
+          foundVariant.sale_price !== undefined
         ) {
-          unitPrice = Number(variant.sale_price);
+          unitPrice = Number(foundVariant.sale_price);
         }
+      } else if (product.has_variants) {
+        throw new Error("VARIANT_REQUIRED");
       }
 
       if (!Number.isFinite(unitPrice) || unitPrice < 0) {
         throw new Error("PRICE_INVALID");
       }
 
-      const lineTotal = Number(
-        (unitPrice * quantity).toFixed(2)
-      );
+      const lineTotal = Number((unitPrice * quantity).toFixed(2));
 
       return {
         catalog_product_id: catalogProduct.id,
@@ -319,6 +405,20 @@ export async function POST(request: Request) {
         quantity,
         unit_price: unitPrice,
         line_total: lineTotal,
+        snapshot: {
+          product_name: product.name,
+          variant_name: variant?.name || null,
+          sku: variant?.sku || product.sku || null,
+          barcode: variant?.barcode || product.barcode || null,
+          internal_code: product.internal_code || null,
+          image_url: resolveProductImage({
+            productId: product.id,
+            variantId: variant?.id || null,
+            productMainImageUrl: product.main_image_url,
+            variantImageUrl: variant?.image_url || null,
+            images: productImages,
+          }),
+        },
       };
     });
 
@@ -339,7 +439,7 @@ export async function POST(request: Request) {
         total_amount: totalAmount,
         status: "submitted",
       })
-      .select("id")
+      .select("id, submitted_at")
       .single();
 
     if (responseError || !response) {
@@ -350,17 +450,22 @@ export async function POST(request: Request) {
       );
     }
 
-    const rowsToInsert = responseItems.map((item) => ({
-      ...item,
+    const responseRows = responseItems.map((item) => ({
       response_id: response.id,
+      catalog_product_id: item.catalog_product_id,
+      product_id: item.product_id,
+      variant_id: item.variant_id,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      line_total: item.line_total,
     }));
 
-    const { error: itemsError } = await admin
+    const { error: responseItemsError } = await admin
       .from("catalog_response_items")
-      .insert(rowsToInsert);
+      .insert(responseRows);
 
-    if (itemsError) {
-      console.error("Response items insert failed:", itemsError);
+    if (responseItemsError) {
+      console.error("Response items insert failed:", responseItemsError);
 
       await admin
         .from("catalog_responses")
@@ -373,31 +478,170 @@ export async function POST(request: Request) {
       );
     }
 
+    const customerEmail = customerContact.includes("@")
+      ? customerContact
+      : null;
+
+    const customerPhone =
+      customerContact && !customerContact.includes("@")
+        ? customerContact
+        : null;
+
+    const orderCustomerName = customerName || customerCompany;
+
+    const { data: order, error: orderError } = await admin
+      .from("orders")
+      .insert({
+        source_catalog_id: catalog.id,
+        source_response_id: response.id,
+
+        customer_name: orderCustomerName,
+        customer_company: customerCompany || null,
+        customer_document: null,
+        customer_email: customerEmail,
+        customer_phone: customerPhone,
+        customer_address: null,
+        customer_city: null,
+        customer_state: null,
+        customer_zip_code: null,
+
+        subtotal: totalAmount,
+        discount_value: 0,
+        shipping_value: 0,
+        total_value: totalAmount,
+
+        payment_method: null,
+        payment_installments: 1,
+        payment_notes: null,
+
+        customer_notes: message || null,
+        internal_notes: null,
+
+        status: "sent",
+
+        created_by: catalog.created_by || null,
+        seller_name: catalogSellerName,
+
+        order_source: "customer_catalog",
+        sync_key: response.id,
+        source_device_id: null,
+        submitted_at: response.submitted_at || new Date().toISOString(),
+      })
+      .select("id, order_number, total_value")
+      .single();
+
+    if (orderError || !order) {
+      console.error("Order insert failed:", orderError);
+
+      await admin
+        .from("catalog_response_items")
+        .delete()
+        .eq("response_id", response.id);
+
+      await admin
+        .from("catalog_responses")
+        .delete()
+        .eq("id", response.id);
+
+      return NextResponse.json(
+        { error: "Não foi possível criar o pedido a partir da seleção." },
+        { status: 500 }
+      );
+    }
+
+    const orderRows = responseItems.map((item) => ({
+      order_id: order.id,
+      product_id: item.product_id,
+      variant_id: item.variant_id,
+
+      product_name: item.snapshot.product_name,
+      variant_name: item.snapshot.variant_name,
+      sku: item.snapshot.sku,
+      barcode: item.snapshot.barcode,
+      internal_code: item.snapshot.internal_code,
+      image_url: item.snapshot.image_url,
+
+      quantity: item.quantity,
+      shipped_quantity: 0,
+
+      original_unit_price: item.unit_price,
+      unit_price: item.unit_price,
+
+      discount_percent: 0,
+      discount_value: 0,
+      line_total: item.line_total,
+
+      notes: null,
+    }));
+
+    const { error: orderItemsError } = await admin
+      .from("order_items")
+      .insert(orderRows);
+
+    if (orderItemsError) {
+      console.error("Order items insert failed:", orderItemsError);
+
+      await admin.from("orders").delete().eq("id", order.id);
+
+      await admin
+        .from("catalog_response_items")
+        .delete()
+        .eq("response_id", response.id);
+
+      await admin
+        .from("catalog_responses")
+        .delete()
+        .eq("id", response.id);
+
+      return NextResponse.json(
+        { error: "Não foi possível criar os itens do pedido." },
+        { status: 500 }
+      );
+    }
+
+    const { error: historyError } = await admin
+      .from("order_status_history")
+      .insert({
+        order_id: order.id,
+        previous_status: null,
+        new_status: "sent",
+        changed_by: null,
+        changed_by_name: "Cliente via catálogo",
+        notes: "Pedido recebido pelo catálogo compartilhado.",
+      });
+
+    if (historyError) {
+      console.error(
+        "Order history insert failed, but order was created:",
+        historyError
+      );
+    }
+
     return NextResponse.json({
       ok: true,
       response_id: response.id,
-      total_amount: totalAmount,
+      order_id: order.id,
+      order_number: order.order_number,
+      total_amount: Number(order.total_value || totalAmount),
     });
   } catch (error) {
     console.error("Public catalog response error:", error);
 
     const knownErrors: Record<string, string> = {
-      CATALOG_PRODUCT_INVALID:
-        "Há um produto inválido na seleção.",
-      PRODUCT_MISMATCH:
-        "Os dados de um produto não conferem.",
+      CATALOG_PRODUCT_INVALID: "Há um produto inválido na seleção.",
+      PRODUCT_MISMATCH: "Os dados de um produto não conferem.",
       PRODUCT_INACTIVE:
         "Um dos produtos selecionados não está mais disponível.",
-      QUANTITY_INVALID:
-        "Há uma quantidade inválida na seleção.",
+      QUANTITY_INVALID: "Há uma quantidade inválida na seleção.",
       VARIANT_MISMATCH:
         "Uma das variações selecionadas não pertence ao produto.",
+      VARIANT_REQUIRED:
+        "Escolha uma variação para todos os produtos que possuem opções.",
       PRICE_INVALID:
         "Não foi possível validar o preço de um dos itens.",
     };
 
-    const message =
-      error instanceof Error ? error.message : "";
+    const message = error instanceof Error ? error.message : "";
 
     return NextResponse.json(
       {

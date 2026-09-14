@@ -39,7 +39,18 @@ function isAllowedForRole(pathname: string, role: Role) {
     );
   }
 
-  if (role === "seller" || role === "viewer") {
+  if (role === "seller") {
+    return (
+      pathname === "/catalogo" ||
+      pathname.startsWith("/catalogo/") ||
+      pathname === "/catalogos" ||
+      pathname.startsWith("/catalogos/") ||
+      pathname === "/pedidos" ||
+      pathname.startsWith("/pedidos/")
+    );
+  }
+
+  if (role === "viewer") {
     return pathname === "/catalogo" || pathname.startsWith("/catalogo/");
   }
 

@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
   BriefcaseBusiness,
+  ClipboardList,
   FilePlus2,
   LibraryBig,
   LogOut,
@@ -42,9 +43,15 @@ const menuGroups: Array<{ label: string; items: MenuItem[] }> = [
   {
     label: "CATÁLOGOS",
     items: [
-      { href: "/catalogos", label: "Criar catálogo", icon: FilePlus2, exact: true, roles: ["admin", "commercial"] },
+      { href: "/catalogos", label: "Criar catálogo", icon: FilePlus2, exact: true, roles: ["admin", "commercial", "seller"] },
       { href: "/catalogos/gerenciar", label: "Central de catálogos", icon: LibraryBig, roles: ["admin", "commercial"] },
       { href: "/catalogo", label: "Catálogo de vendedor", icon: BriefcaseBusiness, roles: ["admin", "commercial", "seller", "viewer"] },
+    ],
+  },
+  {
+    label: "PEDIDOS",
+    items: [
+      { href: "/pedidos", label: "Pedidos", icon: ClipboardList, roles: ["admin", "commercial", "seller"] },
     ],
   },
   {
@@ -99,18 +106,18 @@ export default function AppSidebar() {
     return () => { mounted = false; };
   }, []);
 
-  const currentRole = profile?.role || "admin";
+  const currentRole = profile?.role || null;
 
-  const visibleGroups = useMemo(
-    () =>
-      menuGroups
-        .map((group) => ({
-          ...group,
-          items: group.items.filter((item) => item.roles.includes(currentRole)),
-        }))
-        .filter((group) => group.items.length > 0),
-    [currentRole]
-  );
+  const visibleGroups = useMemo(() => {
+    if (!currentRole) return [];
+
+    return menuGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => item.roles.includes(currentRole)),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [currentRole]);
 
   function isActive(href: string, exact = false) {
     if (exact) return pathname === href;

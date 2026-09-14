@@ -75,6 +75,36 @@ type ProductImage = {
   source: string | null;
 };
 
+function getOptimizedImageUrl(
+  sourceUrl: string,
+  width = 520,
+  quality = 74
+) {
+  // Para imagens públicas do Supabase, usa o serviço nativo de transformação
+  // do Storage/CDN. Assim o navegador não baixa o PNG original gigante e
+  // também não passa pelo nosso Next.js + Sharp.
+  try {
+    const url = new URL(sourceUrl);
+
+    if (url.pathname.includes("/storage/v1/object/public/")) {
+      url.pathname = url.pathname.replace(
+        "/storage/v1/object/public/",
+        "/storage/v1/render/image/public/"
+      );
+
+      url.searchParams.set("width", String(width));
+      url.searchParams.set("quality", String(quality));
+      url.searchParams.set("resize", "contain");
+
+      return url.toString();
+    }
+  } catch {
+    // Se não for uma URL absoluta válida, mantém a origem como fallback.
+  }
+
+  return sourceUrl;
+}
+
 export default function CatalogoClientePage() {
   const params = useParams<{ token: string }>();
   const token = params.token;
@@ -197,9 +227,7 @@ export default function CatalogoClientePage() {
         const { data: imageRows } = await supabase
           .from("product_images")
           .select("id, product_id, variant_id, image_url, catalog_slot, approved, source")
-          .in("product_id", productIds)
-          .eq("source", "ai")
-          .eq("approved", true);
+          .in("product_id", productIds);
 
         setImages((imageRows || []) as ProductImage[]);
 
@@ -265,16 +293,31 @@ export default function CatalogoClientePage() {
 
   function getImage(productId: string, variantId?: string | null) {
     const scoped = images.filter(
-      (image) => image.product_id === productId && image.variant_id === (variantId || null)
+      (image) =>
+        image.product_id === productId &&
+        image.variant_id === (variantId || null) &&
+        Boolean(image.image_url)
     );
-    return (
+
+    const preferred =
+      scoped.find((image) => image.catalog_slot === "front" && image.approved) ||
+      scoped.find((image) => image.approved) ||
       scoped.find((image) => image.catalog_slot === "front") ||
-      scoped[0] ||
-      (!variantId
-        ? images.find((image) => image.product_id === productId && image.variant_id === null)
-        : null) ||
-      null
-    );
+      scoped[0];
+
+    if (preferred) return preferred;
+
+    if (variantId) {
+      const productFallback = images.find(
+        (image) =>
+          image.product_id === productId &&
+          image.variant_id === null &&
+          Boolean(image.image_url)
+      );
+      return productFallback || null;
+    }
+
+    return null;
   }
 
   function getProductImages(productId: string, variantId?: string | null) {
@@ -284,9 +327,12 @@ export default function CatalogoClientePage() {
       .filter(
         (image) =>
           image.product_id === productId &&
-          image.variant_id === (variantId || null)
+          image.variant_id === (variantId || null) &&
+          Boolean(image.image_url)
       )
       .sort((a, b) => {
+        if (a.approved !== b.approved) return a.approved ? -1 : 1;
+
         const ai = preferredSlots.indexOf(a.catalog_slot || "");
         const bi = preferredSlots.indexOf(b.catalog_slot || "");
         const av = ai === -1 ? 999 : ai;
@@ -977,7 +1023,23 @@ export default function CatalogoClientePage() {
                   }}
                 >
                   {image ? (
-                    <img src={image.image_url} alt={item.product.name} />
+                    <img
+                      src={getOptimizedImageUrl(image.image_url, 520, 74)}
+                      alt=""
+                      aria-hidden="true"
+                      loading="lazy"
+                      decoding="async"
+                      onError={(event) => {
+                        const img = event.currentTarget;
+                        const original = image.image_url;
+                        if (img.dataset.fallbackApplied === "1") {
+                          img.style.display = "none";
+                          return;
+                        }
+                        img.dataset.fallbackApplied = "1";
+                        img.src = original;
+                      }}
+                    />
                   ) : (
                     <div className="no-image">Imagem em preparação</div>
                   )}
@@ -1066,8 +1128,21 @@ export default function CatalogoClientePage() {
                                 <div className="variant-image">
                                   {variantImage ? (
                                     <img
-                                      src={variantImage.image_url}
-                                      alt={`${item.product.name} - ${variant.name}`}
+                                      src={getOptimizedImageUrl(variantImage.image_url, 180, 70)}
+                                      alt=""
+                                      aria-hidden="true"
+                                      loading="lazy"
+                                      decoding="async"
+                                      onError={(event) => {
+                                        const img = event.currentTarget;
+                                        const original = variantImage.image_url;
+                                        if (img.dataset.fallbackApplied === "1") {
+                                          img.style.display = "none";
+                                          return;
+                                        }
+                                        img.dataset.fallbackApplied = "1";
+                                        img.src = original;
+                                      }}
                                     />
                                   ) : (
                                     <span>Sem foto</span>
@@ -1301,7 +1376,19 @@ export default function CatalogoClientePage() {
         const currentItem = items.find(
           (item) => item.product.id === openProductId
         );
-        const galleryImages = getProductImages(openProductId);
+        const currentSelectedVariantId =
+          selectedVariants[currentItem?.catalog_product_id || ""] || null;
+
+        const productGalleryImages = getProductImages(openProductId);
+        const variantGalleryImages = currentSelectedVariantId
+          ? getProductImages(openProductId, currentSelectedVariantId)
+          : [];
+
+        const galleryImages =
+          productGalleryImages.length > 0
+            ? productGalleryImages
+            : variantGalleryImages;
+
         const currentImage = galleryImages[activeImageIndex] || galleryImages[0];
 
         if (!currentItem) return null;
@@ -1327,8 +1414,20 @@ export default function CatalogoClientePage() {
               <div className="gallery-main">
                 {currentImage ? (
                   <img
-                    src={currentImage.image_url}
-                    alt={currentItem.product.name}
+                    src={getOptimizedImageUrl(currentImage.image_url, 1200, 82)}
+                    alt=""
+                    aria-hidden="true"
+                    decoding="async"
+                    onError={(event) => {
+                      const img = event.currentTarget;
+                      const original = currentImage.image_url;
+                      if (img.dataset.fallbackApplied === "1") {
+                        img.style.display = "none";
+                        return;
+                      }
+                      img.dataset.fallbackApplied = "1";
+                      img.src = original;
+                    }}
                   />
                 ) : (
                   <div className="gallery-empty">
@@ -1356,8 +1455,10 @@ export default function CatalogoClientePage() {
                         onClick={() => setActiveImageIndex(index)}
                       >
                         <img
-                          src={galleryImage.image_url}
+                          src={getOptimizedImageUrl(galleryImage.image_url, 180, 70)}
                           alt={`${currentItem.product.name} ${index + 1}`}
+                          loading="lazy"
+                          decoding="async"
                         />
                       </button>
                     ))}
@@ -1613,6 +1714,13 @@ export default function CatalogoClientePage() {
           object-fit: contain;
           box-sizing: border-box;
           padding: 22px;
+        }
+
+        .image-wrap > img,
+        .variant-image img,
+        .gallery-main img,
+        .gallery-thumbs img {
+          background: #fff;
         }
 
         .image-wrap.clickable {

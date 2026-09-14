@@ -4,6 +4,9 @@ import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import SellerCart from "@/components/SellerCart";
+import SellerCatalogLoading from "@/components/SellerCatalogLoading";
+import { useSellerCart } from "@/hooks/useSellerCart";
 import { ArrowLeft, Share2 } from "lucide-react";
 
 type Product = {
@@ -60,6 +63,7 @@ type ProductVariant = {
   sku: string | null;
   barcode: string | null;
   color: string | null;
+  image_url?: string | null;
   sale_price: number | null;
   active: boolean;
 };
@@ -70,6 +74,95 @@ const SLOT_LABELS: Record<CatalogSlot, string> = {
   product: "Produto",
   detail: "Detalhe",
 };
+
+function getOptimizedImageUrl(
+  sourceUrl: string,
+  width = 900,
+  quality = 78
+) {
+  const params = new URLSearchParams({
+    src: sourceUrl,
+    w: String(width),
+    q: String(quality),
+  });
+
+  return `/api/catalog-image?${params.toString()}`;
+}
+
+
+const OFFLINE_DB_NAME = "camel-paper-offline";
+const OFFLINE_DB_VERSION = 1;
+const OFFLINE_STORE = "catalog";
+const OFFLINE_RECORD_KEY = "commercial-catalog";
+
+type OfflineProduct = Product & {
+  category_id?: string | null;
+  main_image_url?: string | null;
+};
+
+type OfflineCatalogImage = CatalogImage & {
+  product_id: string;
+};
+
+type OfflineProductVariant = ProductVariant & {
+  product_id: string;
+};
+
+type OfflineCatalogRecord = {
+  key: string;
+  products: OfflineProduct[];
+  categories: Array<{ id: string; name: string }>;
+  catalogImages: OfflineCatalogImage[];
+  productVariants: OfflineProductVariant[];
+  updatedAt: string;
+};
+
+function openOfflineDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(OFFLINE_DB_NAME, OFFLINE_DB_VERSION);
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(OFFLINE_STORE)) {
+        db.createObjectStore(OFFLINE_STORE, { keyPath: "key" });
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function readOfflineCatalog(): Promise<OfflineCatalogRecord | null> {
+  const db = await openOfflineDb();
+
+  const record = await new Promise<OfflineCatalogRecord | null>((resolve, reject) => {
+    const transaction = db.transaction(OFFLINE_STORE, "readonly");
+    const request = transaction.objectStore(OFFLINE_STORE).get(OFFLINE_RECORD_KEY);
+
+    request.onsuccess = () =>
+      resolve((request.result as OfflineCatalogRecord | undefined) || null);
+    request.onerror = () => reject(request.error);
+  });
+
+  db.close();
+  return record;
+}
+
+function orderCatalogImages(items: CatalogImage[]) {
+  const order: Record<CatalogSlot, number> = {
+    front: 0,
+    back: 1,
+    product: 2,
+    detail: 3,
+  };
+
+  return [...items].sort((a, b) => {
+    const aOrder = a.catalog_slot ? order[a.catalog_slot] : 99;
+    const bOrder = b.catalog_slot ? order[b.catalog_slot] : 99;
+    return aOrder - bOrder;
+  });
+}
 
 export default function CatalogoProdutoPage() {
   const params = useParams<{ id: string }>();
@@ -84,88 +177,36 @@ export default function CatalogoProdutoPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [shareFeedback, setShareFeedback] = useState("");
+  const [usingOfflineData, setUsingOfflineData] = useState(false);
+  const [quantity, setQuantity] = useState(1);
+  const [cartFeedback, setCartFeedback] = useState("");
+  const [cartOpen, setCartOpen] = useState(false);
+  const {
+    cart,
+    cartUnits,
+    cartTotal,
+    addItem,
+  } = useSellerCart();
 
   useEffect(() => {
     if (!productId) return;
 
-    async function loadProduct() {
-      setLoading(true);
-      setError("");
+    let mounted = true;
 
-      const [productResult, imagesResult, variantsResult] = await Promise.all([
-        supabase
-          .from("products")
-          .select(
-            `
-            id,
-            name,
-            sku,
-            internal_code,
-            barcode,
-            description,
-            specifications,
-            width_cm,
-            height_cm,
-            depth_cm,
-            weight_g,
-            material,
-            package_quantity,
-            package_unit,
-            sale_price,
-            commercial_visibility,
-            commercial_variants,
-            commercial_highlights,
-            active
-          `
-          )
-          .eq("id", productId)
-          .eq("active", true)
-          .single(),
+    function applyProductData(
+      loadedProduct: Product,
+      approvedImages: CatalogImage[],
+      loadedVariants: ProductVariant[],
+      offline = false
+    ) {
+      if (!mounted) return;
 
-        supabase
-          .from("product_images")
-          .select(
-            "id, image_url, catalog_slot, approved, source, is_primary, variant_id"
-          )
-          .eq("product_id", productId)
-          .eq("source", "ai")
-          .eq("approved", true),
+      const ordered = orderCatalogImages(approvedImages);
 
-        supabase
-          .from("product_variants")
-          .select("id, name, sku, barcode, color, sale_price, active")
-          .eq("product_id", productId)
-          .eq("active", true)
-          .order("created_at", { ascending: true }),
-      ]);
-
-      if (productResult.error || !productResult.data) {
-        console.error("Erro ao carregar produto:", productResult.error);
-        setError("Produto não encontrado no catálogo.");
-        setLoading(false);
-        return;
-      }
-
-      const approvedImages = (imagesResult.data || []) as CatalogImage[];
-      const loadedVariants = (variantsResult.data || []) as ProductVariant[];
-
-      const ordered = [...approvedImages].sort((a, b) => {
-        const order: Record<CatalogSlot, number> = {
-          front: 0,
-          back: 1,
-          product: 2,
-          detail: 3,
-        };
-
-        const aOrder = a.catalog_slot ? order[a.catalog_slot] : 99;
-        const bOrder = b.catalog_slot ? order[b.catalog_slot] : 99;
-
-        return aOrder - bOrder;
-      });
-
-      setProduct(productResult.data as Product);
+      setProduct(loadedProduct);
       setImages(ordered);
       setVariants(loadedVariants);
+      setUsingOfflineData(offline);
 
       const firstVariantId = loadedVariants[0]?.id || null;
       setSelectedVariantId(firstVariantId);
@@ -186,7 +227,160 @@ export default function CatalogoProdutoPage() {
       setLoading(false);
     }
 
+    async function loadOfflineProduct() {
+      try {
+        const offline = await readOfflineCatalog();
+
+        if (!mounted) return false;
+
+        if (!offline) {
+          return false;
+        }
+
+        const offlineProduct = offline.products.find(
+          (item) => item.id === productId && item.active
+        );
+
+        if (!offlineProduct) {
+          return false;
+        }
+
+        const offlineImages = (offline.catalogImages || [])
+          .filter((image) => image.product_id === productId)
+          .map(({ product_id: _productId, ...image }) => image as CatalogImage);
+
+        const offlineVariants = (offline.productVariants || [])
+          .filter((variant) => variant.product_id === productId && variant.active)
+          .map(({ product_id: _productId, ...variant }) => variant as ProductVariant);
+
+        applyProductData(
+          offlineProduct as Product,
+          offlineImages,
+          offlineVariants,
+          true
+        );
+
+        return true;
+      } catch (offlineError) {
+        console.error("Erro ao carregar ficha offline:", offlineError);
+        return false;
+      }
+    }
+
+    async function loadProduct() {
+      setLoading(true);
+      setError("");
+
+      if (!navigator.onLine) {
+        const loaded = await loadOfflineProduct();
+
+        if (!loaded && mounted) {
+          setError(
+            "Este produto não está disponível offline. Conecte-se à internet e atualize o conteúdo offline."
+          );
+          setLoading(false);
+        }
+
+        return;
+      }
+
+      try {
+        const [productResult, imagesResult, variantsResult] = await Promise.all([
+          supabase
+            .from("products")
+            .select(
+              `
+              id,
+              name,
+              sku,
+              internal_code,
+              barcode,
+              description,
+              specifications,
+              width_cm,
+              height_cm,
+              depth_cm,
+              weight_g,
+              material,
+              package_quantity,
+              package_unit,
+              sale_price,
+              commercial_visibility,
+              commercial_variants,
+              commercial_highlights,
+              active
+            `
+            )
+            .eq("id", productId)
+            .eq("active", true)
+            .single(),
+
+          supabase
+            .from("product_images")
+            .select(
+              "id, image_url, catalog_slot, approved, source, is_primary, variant_id"
+            )
+            .eq("product_id", productId)
+            .eq("source", "ai")
+            .eq("approved", true),
+
+          supabase
+            .from("product_variants")
+            .select("id, name, sku, barcode, color, image_url, sale_price, active")
+            .eq("product_id", productId)
+            .eq("active", true)
+            .order("created_at", { ascending: true }),
+        ]);
+
+        const remoteFailed =
+          Boolean(productResult.error) ||
+          !productResult.data ||
+          Boolean(imagesResult.error) ||
+          Boolean(variantsResult.error);
+
+        if (remoteFailed) {
+          console.error(
+            "Erro ao carregar ficha online:",
+            productResult.error,
+            imagesResult.error,
+            variantsResult.error
+          );
+
+          const loaded = await loadOfflineProduct();
+
+          if (!loaded && mounted) {
+            setError("Produto não encontrado no catálogo.");
+            setLoading(false);
+          }
+
+          return;
+        }
+
+        applyProductData(
+          productResult.data as Product,
+          (imagesResult.data || []) as CatalogImage[],
+          (variantsResult.data || []) as ProductVariant[],
+          false
+        );
+      } catch (remoteError) {
+        console.error("Falha de conexão ao carregar produto:", remoteError);
+
+        const loaded = await loadOfflineProduct();
+
+        if (!loaded && mounted) {
+          setError(
+            "Não foi possível carregar este produto. Verifique sua conexão ou atualize o conteúdo offline."
+          );
+          setLoading(false);
+        }
+      }
+    }
+
     loadProduct();
+
+    return () => {
+      mounted = false;
+    };
   }, [productId]);
 
   const visibility = useMemo(
@@ -285,6 +479,50 @@ export default function CatalogoProdutoPage() {
     }).format(value);
   }
 
+  function addCurrentSelectionToCart() {
+    if (!product) return;
+
+    if (variants.length > 0 && !selectedVariant) {
+      setCartFeedback("Escolha uma variação antes de adicionar.");
+      window.setTimeout(() => setCartFeedback(""), 2200);
+      return;
+    }
+
+    const unitPrice = Number(
+      selectedVariant?.sale_price ?? product.sale_price ?? 0
+    );
+
+    if (unitPrice <= 0) {
+      setCartFeedback("Preço não disponível para esta opção.");
+      window.setTimeout(() => setCartFeedback(""), 2200);
+      return;
+    }
+
+    const imageUrl =
+      selectedImage?.image_url ||
+      visibleImages[0]?.image_url ||
+      null;
+
+    const key = `${product.id}:${selectedVariant?.id || "base"}`;
+
+    addItem({
+      key,
+      product_id: product.id,
+      variant_id: selectedVariant?.id || null,
+      product_name: product.name,
+      variant_name: selectedVariant?.name || null,
+      sku: selectedVariant?.sku || product.sku,
+      image_url: imageUrl,
+      quantity,
+      unit_price: unitPrice,
+    });
+
+    setCartFeedback(
+      `${product.name}${selectedVariant ? ` • ${selectedVariant.name}` : ""} adicionado ao pedido.`
+    );
+    window.setTimeout(() => setCartFeedback(""), 2200);
+  }
+
   async function handleShare() {
     const shareData = {
       title: product?.name || "Produto Camel Paper",
@@ -319,19 +557,14 @@ export default function CatalogoProdutoPage() {
 
   if (loading) {
     return (
-      <main className="state-page">
-        <strong>Carregando produto...</strong>
-
-        <style jsx>{`
-          .state-page {
-            min-height: 100vh;
-            display: grid;
-            place-items: center;
-            background: #f6f2ee;
-            color: #6c5e57;
-          }
-        `}</style>
-      </main>
+      <>
+        <SellerCatalogLoading mode="product" />
+        <SellerCart
+          open={cartOpen}
+          onOpenChange={setCartOpen}
+          onCheckout={() => router.push("/catalogo/checkout")}
+        />
+      </>
     );
   }
 
@@ -401,7 +634,7 @@ export default function CatalogoProdutoPage() {
               />
             </div>
 
-            <span>Catálogo Comercial</span>
+            <span>Loja do Vendedor</span>
           </div>
 
           <div className="topbar-actions">
@@ -429,7 +662,11 @@ export default function CatalogoProdutoPage() {
           <div className="main-image">
             {selectedImage ? (
               <>
-                <img src={selectedImage.image_url} alt={product.name} />
+                <img
+                  src={getOptimizedImageUrl(selectedImage.image_url, 1200, 82)}
+                  alt={product.name}
+                  decoding="async"
+                />
 
                 <span className="selected-image-badge">
                   {selectedImage.catalog_slot
@@ -464,12 +701,14 @@ export default function CatalogoProdutoPage() {
                   onClick={() => setSelectedImage(image)}
                 >
                   <img
-                    src={image.image_url}
+                    src={getOptimizedImageUrl(image.image_url, 220, 70)}
                     alt={
                       image.catalog_slot
                         ? SLOT_LABELS[image.catalog_slot]
                         : product.name
                     }
+                    loading="lazy"
+                    decoding="async"
                   />
                   <span>
                     {image.catalog_slot
@@ -485,7 +724,9 @@ export default function CatalogoProdutoPage() {
         <section className="product-content">
           <div className="product-heading">
             <span className="eyebrow">PRODUTO CAMEL PAPER</span>
-            <span className="available-pill">● Disponível no catálogo</span>
+            <span className={`available-pill ${usingOfflineData ? "offline" : ""}`}>
+              {usingOfflineData ? "● Disponível offline" : "● Disponível no catálogo"}
+            </span>
           </div>
 
           <h1>{product.name}</h1>
@@ -558,6 +799,68 @@ export default function CatalogoProdutoPage() {
                 )}
             </div>
           )}
+
+          <div className="purchase-card">
+            <div className="purchase-card-heading">
+              <div>
+                <span>ADICIONAR AO PEDIDO</span>
+                <strong>
+                  {selectedVariant
+                    ? selectedVariant.name
+                    : variants.length > 0
+                      ? "Escolha uma variação"
+                      : product.name}
+                </strong>
+              </div>
+
+              <div className="cart-mini-summary">
+                <span>{cartUnits} un.</span>
+                <strong>{formatCurrency(cartTotal)}</strong>
+              </div>
+            </div>
+
+            <div className="purchase-controls">
+              <div className="quantity-picker">
+                <button
+                  type="button"
+                  onClick={() => setQuantity((current) => Math.max(1, current - 1))}
+                >
+                  −
+                </button>
+                <input
+                  type="number"
+                  min={1}
+                  max={9999}
+                  value={quantity}
+                  onChange={(event) =>
+                    setQuantity(
+                      Math.max(1, Math.min(9999, Number(event.target.value) || 1))
+                    )
+                  }
+                />
+                <button
+                  type="button"
+                  onClick={() => setQuantity((current) => Math.min(9999, current + 1))}
+                >
+                  +
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className="add-order-button"
+                onClick={addCurrentSelectionToCart}
+              >
+                Adicionar ao pedido
+              </button>
+            </div>
+
+            {cartFeedback && (
+              <div className="cart-feedback" role="status">
+                {cartFeedback}
+              </div>
+            )}
+          </div>
 
           <div className="codes">
             {visibility.sku && product.sku && (
@@ -670,6 +973,12 @@ export default function CatalogoProdutoPage() {
           </div>
         </section>
       </div>
+
+      <SellerCart
+        open={cartOpen}
+        onOpenChange={setCartOpen}
+        onCheckout={() => router.push("/catalogo/checkout")}
+      />
 
       <style jsx>{`
         .product-shell {
@@ -897,6 +1206,12 @@ export default function CatalogoProdutoPage() {
           font-weight: 900;
         }
 
+        .available-pill.offline {
+          border-color: #ead8bd;
+          background: #fff7e8;
+          color: #9a5a18;
+        }
+
         .commercial-subtitle {
           margin: 14px 0 0;
           max-width: 520px;
@@ -1027,6 +1342,133 @@ export default function CatalogoProdutoPage() {
           font-size: 30px;
           line-height: 1;
           letter-spacing: -1px;
+        }
+
+        .purchase-card {
+          margin-top: 14px;
+          border: 1px solid #e8d7cc;
+          border-radius: 16px;
+          background: #fff;
+          padding: 14px;
+          box-shadow: 0 10px 24px rgba(76, 47, 34, 0.04);
+        }
+
+        .purchase-card-heading {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          margin-bottom: 12px;
+        }
+
+        .purchase-card-heading > div:first-child {
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+
+        .purchase-card-heading > div:first-child span {
+          color: #ef7a00;
+          font-size: 8px;
+          font-weight: 900;
+          letter-spacing: 1.2px;
+        }
+
+        .purchase-card-heading > div:first-child strong {
+          color: #3f3029;
+          font-size: 13px;
+        }
+
+        .cart-mini-summary {
+          min-width: 105px;
+          text-align: right;
+        }
+
+        .cart-mini-summary span,
+        .cart-mini-summary strong {
+          display: block;
+        }
+
+        .cart-mini-summary span {
+          color: #9a8b83;
+          font-size: 8px;
+          margin-bottom: 2px;
+        }
+
+        .cart-mini-summary strong {
+          color: #8a2a18;
+          font-size: 14px;
+        }
+
+        .purchase-controls {
+          display: grid;
+          grid-template-columns: 122px minmax(0, 1fr);
+          gap: 10px;
+        }
+
+        .quantity-picker {
+          min-height: 46px;
+          border: 1px solid #e2d6ce;
+          border-radius: 11px;
+          background: #fffaf6;
+          display: grid;
+          grid-template-columns: 38px minmax(0, 1fr) 38px;
+          overflow: hidden;
+        }
+
+        .quantity-picker button {
+          border: 0;
+          background: #fff4eb;
+          color: #8a2a18;
+          font-size: 18px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .quantity-picker input {
+          width: 100%;
+          border: 0;
+          border-left: 1px solid #eaded7;
+          border-right: 1px solid #eaded7;
+          outline: 0;
+          background: #fff;
+          text-align: center;
+          color: #392b25;
+          font-weight: 900;
+          -moz-appearance: textfield;
+        }
+
+        .quantity-picker input::-webkit-outer-spin-button,
+        .quantity-picker input::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+
+        .add-order-button {
+          min-height: 46px;
+          border: 1px solid #8a2a18;
+          border-radius: 11px;
+          background: #8a2a18;
+          color: #fff;
+          font-size: 11px;
+          font-weight: 900;
+          cursor: pointer;
+          transition: transform .18s ease, background .18s ease;
+        }
+
+        .add-order-button:hover {
+          transform: translateY(-1px);
+          background: #742113;
+        }
+
+        .cart-feedback {
+          margin-top: 9px;
+          border-radius: 9px;
+          background: #eef8f0;
+          color: #347148;
+          padding: 8px 10px;
+          font-size: 9px;
+          font-weight: 800;
         }
 
         .commercial-actions {
@@ -1250,7 +1692,373 @@ export default function CatalogoProdutoPage() {
           font-weight: 900;
         }
 
+        .floating-cart {
+          position: fixed;
+          right: 26px;
+          bottom: 24px;
+          z-index: 60;
+          min-width: 230px;
+          min-height: 58px;
+          border: 1px solid #e5c9b8;
+          border-radius: 16px;
+          background: #fff;
+          box-shadow: 0 18px 48px rgba(68, 35, 24, .2);
+          color: #4b3931;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 11px;
+          cursor: pointer;
+        }
+
+        .floating-cart.has-items {
+          border-color: #d98c5b;
+        }
+
+        .floating-cart > span {
+          width: 38px;
+          height: 38px;
+          border-radius: 11px;
+          background: #fff0e3;
+          display: grid;
+          place-items: center;
+          font-size: 18px;
+        }
+
+        .floating-cart > div {
+          min-width: 0;
+          flex: 1;
+          text-align: left;
+        }
+
+        .floating-cart small,
+        .floating-cart strong {
+          display: block;
+        }
+
+        .floating-cart small {
+          color: #9b8a80;
+          font-size: 8px;
+          margin-bottom: 2px;
+        }
+
+        .floating-cart strong {
+          color: #8a2a18;
+          font-size: 10px;
+        }
+
+        .floating-cart b {
+          min-width: 25px;
+          height: 25px;
+          border-radius: 999px;
+          background: #ef7a00;
+          color: #fff;
+          display: grid;
+          place-items: center;
+          font-size: 9px;
+        }
+
+        .cart-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 100;
+          background: rgba(40, 29, 24, .34);
+          backdrop-filter: blur(4px);
+          display: flex;
+          justify-content: flex-end;
+        }
+
+        .cart-drawer {
+          width: min(520px, 100%);
+          height: 100%;
+          background: #f7f3ef;
+          box-shadow: -20px 0 60px rgba(44, 25, 17, .18);
+          display: flex;
+          flex-direction: column;
+        }
+
+        .cart-drawer-header {
+          padding: 22px 22px 18px;
+          background: linear-gradient(120deg, #7b1f10, #a3381e);
+          color: #fff;
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+        }
+
+        .cart-drawer-header span {
+          display: block;
+          color: #ffc07a;
+          font-size: 9px;
+          font-weight: 900;
+          letter-spacing: 1.6px;
+          margin-bottom: 5px;
+        }
+
+        .cart-drawer-header h2 {
+          margin: 0;
+          font-size: 25px;
+        }
+
+        .cart-drawer-header p {
+          margin: 5px 0 0;
+          color: rgba(255,255,255,.72);
+          font-size: 10px;
+        }
+
+        .cart-drawer-header > button {
+          width: 36px;
+          height: 36px;
+          border: 1px solid rgba(255,255,255,.3);
+          border-radius: 10px;
+          background: rgba(255,255,255,.08);
+          color: #fff;
+          font-size: 22px;
+          cursor: pointer;
+        }
+
+        .cart-empty {
+          flex: 1;
+          display: grid;
+          place-items: center;
+          align-content: center;
+          text-align: center;
+          padding: 30px;
+        }
+
+        .cart-empty strong {
+          color: #49382f;
+          font-size: 14px;
+        }
+
+        .cart-empty p {
+          margin: 6px 0 0;
+          color: #93857d;
+          font-size: 11px;
+        }
+
+        .cart-items {
+          flex: 1;
+          overflow: auto;
+          padding: 14px;
+        }
+
+        .cart-item {
+          border: 1px solid #e6ddd7;
+          border-radius: 14px;
+          background: #fff;
+          padding: 11px;
+          display: grid;
+          grid-template-columns: 68px minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: start;
+          margin-bottom: 9px;
+        }
+
+        .cart-item-image {
+          width: 68px;
+          height: 68px;
+          border-radius: 10px;
+          overflow: hidden;
+          background: #faf7f4;
+          display: grid;
+          place-items: center;
+          color: #8a2a18;
+          font-weight: 900;
+        }
+
+        .cart-item-image img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          padding: 5px;
+          box-sizing: border-box;
+        }
+
+        .cart-item-copy {
+          min-width: 0;
+        }
+
+        .cart-item-copy > strong,
+        .cart-item-copy > small,
+        .cart-item-copy > b {
+          display: block;
+        }
+
+        .cart-item-copy > strong {
+          color: #42332c;
+          font-size: 10px;
+          line-height: 1.3;
+        }
+
+        .cart-item-copy > small {
+          margin-top: 2px;
+          color: #94857d;
+          font-size: 8px;
+        }
+
+        .cart-item-copy > b {
+          margin-top: 5px;
+          color: #8a2a18;
+          font-size: 10px;
+        }
+
+        .cart-item-controls {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          margin-top: 8px;
+        }
+
+        .quantity-control.compact {
+          width: 102px;
+          min-height: 32px;
+          border: 1px solid #e2d6ce;
+          border-radius: 10px;
+          background: #fff;
+          display: grid;
+          grid-template-columns: 31px 40px 31px;
+          overflow: hidden;
+        }
+
+        .quantity-control.compact button {
+          border: 0;
+          background: #fff8f3;
+          color: #8a2a18;
+          font-size: 14px;
+          cursor: pointer;
+        }
+
+        .quantity-control.compact input {
+          width: 100%;
+          border: 0;
+          border-left: 1px solid #eee3dc;
+          border-right: 1px solid #eee3dc;
+          outline: 0;
+          text-align: center;
+          color: #3d302a;
+          font-weight: 900;
+          background: #fff;
+          -moz-appearance: textfield;
+        }
+
+        .quantity-control.compact input::-webkit-outer-spin-button,
+        .quantity-control.compact input::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+
+        .remove-cart-item {
+          border: 0;
+          background: transparent;
+          color: #a1483b;
+          padding: 0;
+          font-size: 8px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .cart-line-total {
+          color: #3d2f29;
+          font-size: 10px;
+          white-space: nowrap;
+        }
+
+        .cart-footer {
+          border-top: 1px solid #e3d8d1;
+          background: #fff;
+          padding: 16px;
+        }
+
+        .cart-total-row {
+          display: flex;
+          align-items: flex-end;
+          justify-content: space-between;
+          gap: 18px;
+        }
+
+        .cart-total-row span {
+          color: #8d8079;
+          font-size: 10px;
+          font-weight: 800;
+        }
+
+        .cart-total-row strong {
+          color: #8a2a18;
+          font-size: 24px;
+          letter-spacing: -.7px;
+        }
+
+        .cart-footer > p {
+          margin: 8px 0 13px;
+          color: #978a83;
+          font-size: 8px;
+          line-height: 1.5;
+        }
+
+        .review-order-button {
+          width: 100%;
+          min-height: 46px;
+          border: 0;
+          border-radius: 11px;
+          background: #8a2a18;
+          color: #fff;
+          padding: 0 13px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .review-order-button:disabled {
+          opacity: .62;
+        }
+
+        .review-order-button span {
+          font-size: 8px;
+          opacity: .7;
+        }
+
+        .clear-cart-button {
+          width: 100%;
+          margin-top: 7px;
+          min-height: 36px;
+          border: 1px solid #e5dad3;
+          border-radius: 9px;
+          background: #fff;
+          color: #8b7e77;
+          font-size: 8px;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
         @media (max-width: 900px) {
+          .floating-cart {
+            left: 16px;
+            right: 16px;
+            bottom: 14px;
+            width: auto;
+          }
+
+          .cart-drawer {
+            width: 100%;
+          }
+
+          .cart-item {
+            grid-template-columns: 58px minmax(0, 1fr);
+          }
+
+          .cart-item-image {
+            width: 58px;
+            height: 58px;
+          }
+
+          .cart-line-total {
+            grid-column: 2;
+          }
+
           .product-container {
             grid-template-columns: 1fr;
           }
@@ -1324,6 +2132,18 @@ export default function CatalogoProdutoPage() {
           .presentation-note {
             align-items: flex-start;
             flex-direction: column;
+          }
+
+          .purchase-card-heading {
+            align-items: flex-start;
+          }
+
+          .purchase-controls {
+            grid-template-columns: 1fr;
+          }
+
+          .cart-mini-summary {
+            text-align: left;
           }
 
           .commercial-actions {

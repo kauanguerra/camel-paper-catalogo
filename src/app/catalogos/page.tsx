@@ -60,6 +60,13 @@ type CatalogResponseSummary = {
   submitted_at: string;
 };
 
+type Role = "admin" | "commercial" | "seller" | "viewer";
+
+type Profile = {
+  id: string;
+  role: Role | null;
+};
+
 export default function CatalogosAdminPage() {
   const router = useRouter();
 
@@ -89,13 +96,34 @@ export default function CatalogosAdminPage() {
   const [clientContact, setClientContact] = useState("");
   const [validUntil, setValidUntil] = useState("");
   const [shareAfterCreate, setShareAfterCreate] = useState(false);
+  const [productsPerPage, setProductsPerPage] = useState<1 | 2 | 4>(2);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [profile, setProfile] = useState<Profile | null>(null);
+
+  const role: Role = profile?.role || "viewer";
+  const canEditCatalogPrices = role === "admin" || role === "commercial";
+  const canAccessCatalogCenter = role === "admin" || role === "commercial";
 
   useEffect(() => {
     async function loadData() {
       setLoading(true);
+
+      const { data: authData } = await supabase.auth.getUser();
+      const user = authData.user;
+
+      if (user) {
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("id, role")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (profileData) {
+          setProfile(profileData as Profile);
+        }
+      }
 
       const [
         categoriesResult,
@@ -201,6 +229,20 @@ export default function CatalogosAdminPage() {
       images.find((image) => image.product_id === productId) ||
       null
     );
+  }
+
+  function getOptimizedImageUrl(
+    sourceUrl: string,
+    width = 360,
+    quality = 72
+  ) {
+    const params = new URLSearchParams({
+      src: sourceUrl,
+      w: String(width),
+      q: String(quality),
+    });
+
+    return `/api/catalog-image?${params.toString()}`;
   }
 
   function formatPrice(value: number | null) {
@@ -335,6 +377,16 @@ export default function CatalogosAdminPage() {
     return `${y}-${m}-${d}` > validUntil;
   }
 
+  const estimatedProductPages =
+    selectedProducts.length > 0
+      ? Math.ceil(selectedProducts.length / productsPerPage)
+      : 0;
+
+  const estimatedTotalPages =
+    selectedProducts.length > 0
+      ? estimatedProductPages + 2
+      : 2;
+
   async function handleCreateCatalog() {
     if (!name.trim()) {
       setFeedback("Informe um nome para o catálogo.");
@@ -366,10 +418,12 @@ export default function CatalogosAdminPage() {
           client_company: clientCompany.trim() || null,
           client_contact: clientContact.trim() || null,
           valid_until: validUntil || null,
+          products_per_page: productsPerPage,
           share_enabled: shareAfterCreate,
           sent_at: shareAfterCreate ? new Date().toISOString() : null,
           status: "draft",
           active: true,
+          created_by: profile?.id || null,
         })
         .select("id")
         .single();
@@ -389,17 +443,23 @@ export default function CatalogosAdminPage() {
           position: index,
 
           custom_unit_price:
-            unitPrice !== undefined && unitPrice.trim() !== ""
+            canEditCatalogPrices &&
+            unitPrice !== undefined &&
+            unitPrice.trim() !== ""
               ? priceToNumber(unitPrice)
               : null,
 
           custom_package_price:
-            packagePrice !== undefined && packagePrice.trim() !== ""
+            canEditCatalogPrices &&
+            packagePrice !== undefined &&
+            packagePrice.trim() !== ""
               ? priceToNumber(packagePrice)
               : null,
 
           custom_master_price:
-            masterPrice !== undefined && masterPrice.trim() !== ""
+            canEditCatalogPrices &&
+            masterPrice !== undefined &&
+            masterPrice.trim() !== ""
               ? priceToNumber(masterPrice)
               : null,
 
@@ -410,7 +470,9 @@ export default function CatalogosAdminPage() {
           // Compatibilidade temporária com as telas antigas:
           // custom_price continua representando o preço comercial do pacote.
           custom_price:
-            packagePrice !== undefined && packagePrice.trim() !== ""
+            canEditCatalogPrices &&
+            packagePrice !== undefined &&
+            packagePrice.trim() !== ""
               ? priceToNumber(packagePrice)
               : null,
         };
@@ -572,10 +634,73 @@ export default function CatalogosAdminPage() {
               </label>
             </section>
 
+            <section className="panel layout-panel">
+              <div className="panel-heading">
+                <div>
+                  <span>ETAPA 3</span>
+                  <h2>Layout do PDF</h2>
+                  <p>
+                    Escolha quantos produtos devem aparecer em cada página do PDF.
+                    O padrão recomendado é 2 produtos por página.
+                  </p>
+                </div>
+              </div>
+
+              <div className="page-density-options">
+                {([1, 2, 4] as const).map((option) => {
+                  const productPages =
+                    selectedProducts.length > 0
+                      ? Math.ceil(selectedProducts.length / option)
+                      : 0;
+
+                  return (
+                    <button
+                      type="button"
+                      key={option}
+                      className={productsPerPage === option ? "active" : ""}
+                      onClick={() => setProductsPerPage(option)}
+                    >
+                      <strong>{option}</strong>
+                      <span>
+                        {option === 1
+                          ? "produto por página"
+                          : "produtos por página"}
+                      </span>
+                      <small>
+                        {selectedProducts.length > 0
+                          ? `≈ ${productPages} página${productPages === 1 ? "" : "s"} de produtos`
+                          : "Selecione produtos para estimar"}
+                      </small>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="layout-estimate">
+                <div>
+                  <span>PRODUTOS SELECIONADOS</span>
+                  <strong>{selectedProducts.length}</strong>
+                </div>
+                <div>
+                  <span>PÁGINAS DE PRODUTOS</span>
+                  <strong>{estimatedProductPages}</strong>
+                </div>
+                <div>
+                  <span>ESTIMATIVA TOTAL</span>
+                  <strong>{estimatedTotalPages}</strong>
+                </div>
+              </div>
+
+              <small className="layout-note">
+                A estimativa total considera capa + sumário + páginas de produtos.
+                Catálogos com muitas variações podem exigir ajustes adicionais no layout.
+              </small>
+            </section>
+
             <section className="panel">
               <div className="panel-heading selection-heading">
                 <div>
-                  <span>ETAPA 3</span>
+                  <span>ETAPA 4</span>
                   <h2>Selecionar produtos</h2>
                   <p>
                     Selecione produtos individualmente, por categoria ou todos de uma vez. As fotos do catálogo
@@ -653,7 +778,12 @@ export default function CatalogosAdminPage() {
                       >
                         <div className="product-image">
                           {image ? (
-                            <img src={image.image_url} alt={product.name} />
+                            <img
+                              src={getOptimizedImageUrl(image.image_url, 360, 72)}
+                              alt={product.name}
+                              loading="lazy"
+                              decoding="async"
+                            />
                           ) : (
                             <div className="no-image">
                               <span>CP</span>
@@ -713,10 +843,18 @@ export default function CatalogosAdminPage() {
                                         <span>R$</span>
                                         <input
                                           inputMode="decimal"
-                                          value={customMap[product.id] ?? ""}
+                                          value={
+                                            canEditCatalogPrices
+                                              ? customMap[product.id] ?? ""
+                                              : defaultPrice != null
+                                                ? Number(defaultPrice).toFixed(2).replace(".", ",")
+                                                : ""
+                                          }
                                           onChange={(event) =>
+                                            canEditCatalogPrices &&
                                             updateCustomPrice(product.id, level, event.target.value)
                                           }
+                                          disabled={!canEditCatalogPrices}
                                           placeholder={
                                             defaultPrice != null
                                               ? Number(defaultPrice).toFixed(2).replace(".", ",")
@@ -728,7 +866,7 @@ export default function CatalogosAdminPage() {
 
                                     <div className="catalog-price-footer">
                                       <small>Final: {formatPrice(getCatalogPrice(product, level))}</small>
-                                      {customMap[product.id]?.trim() && (
+                                      {canEditCatalogPrices && customMap[product.id]?.trim() && (
                                         <button
                                           type="button"
                                           onClick={() => resetCustomPrice(product.id, level)}
@@ -789,13 +927,25 @@ export default function CatalogosAdminPage() {
                 </div>
               </div>
 
+              <div className="pdf-layout-summary">
+                <span>LAYOUT DO PDF</span>
+                <strong>{productsPerPage} {productsPerPage === 1 ? "produto" : "produtos"} por página</strong>
+                <small>
+                  {selectedProducts.length > 0
+                    ? `≈ ${estimatedProductPages} página${estimatedProductPages === 1 ? "" : "s"} de produtos · ≈ ${estimatedTotalPages} no total`
+                    : "Selecione produtos para calcular a estimativa."}
+                </small>
+              </div>
+
               {selectedProducts.length > 0 && (
                 <div className="price-summary">
                   <span>Estrutura comercial</span>
                   <strong>{selectedProducts.length} produto(s)</strong>
                   <small>
                     Cada produto pode exibir preço unitário, de pacote e/ou caixa master.
-                    Os preços personalizados ficam salvos somente neste catálogo.
+                    {canEditCatalogPrices
+                      ? " Os preços personalizados ficam salvos somente neste catálogo."
+                      : " Os preços seguem os valores comerciais oficiais definidos pela administração."}
                   </small>
                 </div>
               )}
@@ -816,6 +966,7 @@ export default function CatalogosAdminPage() {
               {feedback && <div className="feedback">{feedback}</div>}
             </section>
 
+            {canAccessCatalogCenter && (
             <section className="existing-card management-shortcut">
               <div className="existing-heading">
                 <div>
@@ -844,6 +995,7 @@ export default function CatalogosAdminPage() {
                 Abrir central de catálogos →
               </Link>
             </section>
+            )}
           </aside>
         </div>
       </section>
@@ -1206,6 +1358,128 @@ export default function CatalogosAdminPage() {
           line-height: 1.45;
         }
 
+        .layout-panel {
+          overflow: hidden;
+        }
+
+        .page-density-options {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .page-density-options button {
+          min-height: 110px;
+          border: 1px solid #e4d9d2;
+          border-radius: 13px;
+          background: #fcfaf8;
+          padding: 14px;
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          justify-content: center;
+          gap: 4px;
+          text-align: left;
+          cursor: pointer;
+          transition: transform .18s ease, border-color .18s ease, background .18s ease, box-shadow .18s ease;
+        }
+
+        .page-density-options button:hover {
+          transform: translateY(-1px);
+          border-color: #e8b88f;
+          background: #fffaf5;
+        }
+
+        .page-density-options button.active {
+          border-color: #ef7a00;
+          background: #fff4e9;
+          box-shadow: 0 7px 20px rgba(239, 122, 0, .08);
+        }
+
+        .page-density-options strong {
+          color: #8a2a18;
+          font-size: 25px;
+          line-height: 1;
+        }
+
+        .page-density-options span {
+          color: #4f3c34;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .page-density-options small {
+          color: #94867f;
+          font-size: 8px;
+          line-height: 1.4;
+        }
+
+        .layout-estimate {
+          margin-top: 12px;
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .layout-estimate > div {
+          padding: 10px 11px;
+          border: 1px solid #eadfd9;
+          border-radius: 10px;
+          background: #fff;
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+
+        .layout-estimate span {
+          color: #9b8e87;
+          font-size: 6px;
+          font-weight: 900;
+          letter-spacing: .6px;
+        }
+
+        .layout-estimate strong {
+          color: #8a2a18;
+          font-size: 16px;
+        }
+
+        .layout-note {
+          display: block;
+          margin-top: 10px;
+          color: #9a8e87;
+          font-size: 8px;
+          line-height: 1.5;
+        }
+
+        .pdf-layout-summary {
+          margin: 0 0 16px;
+          padding: 11px;
+          border: 1px solid #e7ddd7;
+          border-radius: 10px;
+          background: #fcfaf8;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .pdf-layout-summary span {
+          color: #ef7a00;
+          font-size: 7px;
+          font-weight: 900;
+          letter-spacing: .9px;
+        }
+
+        .pdf-layout-summary strong {
+          color: #8a2a18;
+          font-size: 13px;
+        }
+
+        .pdf-layout-summary small {
+          color: #8f827b;
+          font-size: 7px;
+          line-height: 1.45;
+        }
+
         .client-summary {
           margin-top: 14px;
           padding: 12px;
@@ -1516,6 +1790,13 @@ export default function CatalogosAdminPage() {
         .price-input-wrap input:focus {
           border: 0;
           box-shadow: none;
+        }
+
+        .price-input-wrap input:disabled {
+          background: #f6f2ef;
+          color: #6f625b;
+          cursor: not-allowed;
+          opacity: 1;
         }
 
         .catalog-price-footer {
