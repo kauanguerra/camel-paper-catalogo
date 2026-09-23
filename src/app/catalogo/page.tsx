@@ -219,6 +219,41 @@ export default function CatalogoPage() {
       }
     }
 
+    async function loadAllApprovedProductImages() {
+      const PAGE_SIZE = 1000;
+      const allImages: ProductImage[] = [];
+      let from = 0;
+
+      while (true) {
+        const { data, error } = await supabase
+          .from("product_images")
+          .select(
+            "id, product_id, image_url, catalog_slot, image_type, approved, source, is_primary, variant_id"
+          )
+          .eq("approved", true)
+          .order("id", { ascending: true })
+          .range(from, from + PAGE_SIZE - 1);
+
+        if (error) {
+          return {
+            data: [] as ProductImage[],
+            error,
+          };
+        }
+
+        const page = (data || []) as ProductImage[];
+        allImages.push(...page);
+
+        if (page.length < PAGE_SIZE) break;
+        from += PAGE_SIZE;
+      }
+
+      return {
+        data: allImages,
+        error: null,
+      };
+    }
+
     async function loadCatalog() {
       setLoading(true);
       setOfflineMessage(null);
@@ -244,12 +279,7 @@ export default function CatalogoPage() {
             .eq("active", true)
             .order("name"),
 
-          supabase
-            .from("product_images")
-            .select(
-              "id, product_id, image_url, catalog_slot, image_type, approved, source, is_primary, variant_id"
-            )
-            .eq("approved", true),
+          loadAllApprovedProductImages(),
 
           supabase
             .from("product_variants")

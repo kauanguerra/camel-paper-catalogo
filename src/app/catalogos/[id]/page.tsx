@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
   getOptimizedCatalogImageUrl,
+  isCatalogReadyImage,
   resolveCatalogGallery,
   resolveCatalogPresentationImage,
   resolveCatalogVariantImage,
@@ -155,6 +156,7 @@ export default function CatalogPreviewPage() {
   const [responsesLoading, setResponsesLoading] = useState(true);
   const [openResponseId, setOpenResponseId] = useState<string | null>(null);
   const [printResponseId, setPrintResponseId] = useState<string | null>(null);
+  const [visualCatalogMode, setVisualCatalogMode] = useState(false);
 
   useEffect(() => {
     if (!catalogId) return;
@@ -255,12 +257,38 @@ export default function CatalogPreviewPage() {
       if (normalizedProducts.length > 0) {
         const productIds = normalizedProducts.map((product) => product.id);
 
+        const loadAllApprovedProductImages = async () => {
+          const PAGE_SIZE = 1000;
+          const allImages: ProductImage[] = [];
+          let from = 0;
+
+          while (true) {
+            const { data, error } = await supabase
+              .from("product_images")
+              .select(
+                "id, product_id, image_url, catalog_slot, image_type, is_primary, approved, source, variant_id"
+              )
+              .in("product_id", productIds)
+              .eq("approved", true)
+              .order("id", { ascending: true })
+              .range(from, from + PAGE_SIZE - 1);
+
+            if (error) {
+              return { data: [] as ProductImage[], error };
+            }
+
+            const page = (data || []) as ProductImage[];
+            allImages.push(...page);
+
+            if (page.length < PAGE_SIZE) break;
+            from += PAGE_SIZE;
+          }
+
+          return { data: allImages, error: null };
+        };
+
         const [imageResult, variantResult] = await Promise.all([
-          supabase
-            .from("product_images")
-            .select("id, product_id, image_url, catalog_slot, image_type, is_primary, approved, source, variant_id")
-            .in("product_id", productIds)
-            .eq("approved", true),
+          loadAllApprovedProductImages(),
           supabase
             .from("product_variants")
             .select("id, product_id, name, sku, barcode, color, image_url, sale_price, active")
@@ -268,6 +296,10 @@ export default function CatalogPreviewPage() {
             .eq("active", true)
             .order("created_at", { ascending: true }),
         ]);
+
+        if (imageResult.error) {
+          console.error("Erro ao carregar imagens do catálogo:", imageResult.error);
+        }
 
         setImages((imageResult.data || []) as ProductImage[]);
         setVariants((variantResult.data || []) as ProductVariant[]);
@@ -352,6 +384,81 @@ export default function CatalogPreviewPage() {
     variantId: string
   ): ProductImage | null {
     return resolveCatalogVariantImage(images, productId, variantId);
+  }
+
+  function getVisualCatalogImages(productId: string) {
+    const product = products.find((item) => item.id === productId);
+    if (!product) return [];
+
+    const result: Array<{
+      key: string;
+      image: ProductImage;
+      label: string;
+      variantName: string | null;
+    }> = [];
+    const seen = new Set<string>();
+
+    for (const item of getCatalogImages(productId)) {
+      if (seen.has(item.image.image_url)) continue;
+      seen.add(item.image.image_url);
+      result.push({
+        key: item.image.id,
+        image: item.image,
+        label: item.label,
+        variantName: null,
+      });
+    }
+
+    for (const variant of getProductVariants(productId)) {
+      const variantImages = images
+        .filter(
+          (image) =>
+            image.product_id === productId &&
+            image.variant_id === variant.id &&
+            isCatalogReadyImage(image)
+        )
+        .sort((a, b) => {
+          const rank = (image: ProductImage) => {
+            if (image.catalog_slot === "front") return 0;
+            if (image.is_primary) return 1;
+            if (image.catalog_slot === "product") return 2;
+            if (image.catalog_slot === "detail") return 3;
+            if (image.catalog_slot === "back") return 4;
+            return 5;
+          };
+          return rank(a) - rank(b);
+        });
+
+      for (const image of variantImages) {
+        if (seen.has(image.image_url)) continue;
+        seen.add(image.image_url);
+        result.push({
+          key: image.id,
+          image,
+          label:
+            image.catalog_slot === "front"
+              ? "Frente"
+              : image.catalog_slot === "back"
+                ? "Verso"
+                : image.catalog_slot === "detail"
+                  ? "Detalhe"
+                  : image.catalog_slot === "product"
+                    ? "Produto"
+                    : "Foto profissional",
+          variantName: variant.name,
+        });
+      }
+    }
+
+    return result;
+  }
+
+  function chunkVisualImages<T>(items: T[], size = 6) {
+    const chunks: T[][] = [];
+    for (let index = 0; index < items.length; index += size) {
+      chunks.push(items.slice(index, index + size));
+    }
+    return chunks.length > 0 ? chunks : [[]];
   }
 
   function getPublicCatalogUrl() {
@@ -696,8 +803,15 @@ export default function CatalogPreviewPage() {
           <button type="button" onClick={togglePublished} disabled={publishing}>
             {catalog.status === "published" ? "Voltar para rascunho" : "Publicar"}
           </button>
+          <button
+            type="button"
+            className={`visual-mode-button ${visualCatalogMode ? "active" : ""}`}
+            onClick={() => setVisualCatalogMode((current) => !current)}
+          >
+            {visualCatalogMode ? "✓ Catálogo só fotos" : "Catálogo só fotos"}
+          </button>
           <button type="button" className="print-button" onClick={() => window.print()}>
-            Imprimir / Salvar PDF
+            {visualCatalogMode ? "Salvar PDF só fotos" : "Imprimir / Salvar PDF"}
           </button>
         </div>
       </div>
@@ -1085,7 +1199,82 @@ export default function CatalogPreviewPage() {
         );
       })()}
 
-      <section className="catalog-document">
+      <section className={`catalog-document ${visualCatalogMode ? "visual-catalog-document" : ""}`}>
+        {visualCatalogMode ? (
+          <>
+            <section className="visual-cover-page print-page">
+              <div className="visual-cover-brand">
+                <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={230} height={90} priority />
+                <span>CATÁLOGO VISUAL</span>
+              </div>
+              <div className="visual-cover-copy">
+                <span>LINHA DE PRODUTOS CAMEL PAPER</span>
+                <h1>{catalog.cover_title || catalog.name || "Catálogo de Produtos"}</h1>
+                <p>Apresentação visual com fotos profissionais de produtos, detalhes e variações.</p>
+                <div className="visual-cover-count"><strong>{products.length}</strong><span>produtos selecionados</span></div>
+              </div>
+              <footer><span>Camel Paper</span><strong>camelpaper.com.br</strong></footer>
+            </section>
+
+            {products.flatMap((product, productIndex) => {
+              const visualImages = getVisualCatalogImages(product.id);
+              const imagePages = chunkVisualImages(visualImages, 6);
+              const catalogGroup = getCatalogGroup(product);
+
+              return imagePages.map((pageImages, imagePageIndex) => (
+                <section className="visual-product-page print-page" key={`${product.id}-visual-${imagePageIndex}`}>
+                  <header className="visual-product-header">
+                    <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={145} height={56} />
+                    <div>
+                      <span>{catalogGroup?.name || "PRODUTO CAMEL PAPER"}</span>
+                      <small>{String(productIndex + 1).padStart(2, "0")} / {String(products.length).padStart(2, "0")}</small>
+                    </div>
+                  </header>
+
+                  <div className="visual-product-title">
+                    <div>
+                      <h2>{product.name}</h2>
+                      <div className="visual-product-codes">
+                        {product.sku && <span><b>SKU</b> {product.sku}</span>}
+                        {product.barcode && <span><b>EAN</b> {product.barcode}</span>}
+                      </div>
+                    </div>
+                    {imagePages.length > 1 && <small>Fotos {imagePageIndex + 1}/{imagePages.length}</small>}
+                  </div>
+
+                  {pageImages.length > 0 ? (
+                    <div className={`visual-photo-grid count-${pageImages.length}`}>
+                      {pageImages.map((item, photoIndex) => (
+                        <figure className={`visual-photo-card ${imagePageIndex === 0 && photoIndex === 0 ? "featured" : ""}`} key={item.key}>
+                          <div className="visual-photo-frame">
+                            <img
+                              src={getOptimizedCatalogImageUrl(item.image.image_url, imagePageIndex === 0 && photoIndex === 0 ? 1100 : 720, 82)}
+                              alt={`${product.name} - ${item.variantName || item.label}`}
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          </div>
+                          <figcaption>
+                            <strong>{item.variantName || item.label}</strong>
+                            {item.variantName && <span>{item.label}</span>}
+                          </figcaption>
+                        </figure>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="visual-empty">Imagens profissionais em preparação.</div>
+                  )}
+
+                  <footer className="visual-product-footer">
+                    <span>Catálogo visual • Sem preços</span>
+                    <span>{product.name}</span>
+                  </footer>
+                </section>
+              ));
+            })}
+          </>
+        ) : (
+          <>
         <section className="cover-page print-page">
           <svg
             className="cover-print-bg"
@@ -1615,6 +1804,8 @@ export default function CatalogPreviewPage() {
               </section>
             );
           })
+        )}
+          </>
         )}
       </section>
 
@@ -3508,7 +3699,75 @@ export default function CatalogPreviewPage() {
           font-size: 2.8mm;
         }
 
+
+        .visual-mode-button.active {
+          border-color: #8a2a18 !important;
+          background: #8a2a18 !important;
+          color: #fff !important;
+        }
+
+        .visual-cover-page, .visual-product-page {
+          width: 210mm;
+          min-height: 297mm;
+          margin: 18px auto;
+          background: #fff;
+          box-sizing: border-box;
+        }
+
+        .visual-cover-page {
+          padding: 18mm;
+          display: flex;
+          flex-direction: column;
+          background: linear-gradient(145deg, #fff 0%, #fff8f1 65%, #f5e6da 100%);
+        }
+
+        .visual-cover-brand { display:flex; align-items:center; justify-content:space-between; }
+        .visual-cover-brand span { color:#8a2a18; font-size:3mm; font-weight:900; letter-spacing:1.4mm; }
+        .visual-cover-copy { margin:auto 0; max-width:150mm; }
+        .visual-cover-copy > span { color:#ef7a00; font-size:3mm; font-weight:900; letter-spacing:1mm; }
+        .visual-cover-copy h1 { margin:5mm 0 4mm; color:#3d2b24; font-size:18mm; line-height:.98; letter-spacing:-.8mm; }
+        .visual-cover-copy p { max-width:120mm; color:#76675f; font-size:4mm; line-height:1.6; }
+        .visual-cover-count { margin-top:12mm; display:inline-flex; align-items:baseline; gap:3mm; padding:4mm 6mm; border-radius:4mm; background:#fff; border:1px solid #eaded5; }
+        .visual-cover-count strong { color:#8a2a18; font-size:10mm; }
+        .visual-cover-count span { color:#76675f; font-size:3mm; font-weight:800; }
+        .visual-cover-page > footer { display:flex; justify-content:space-between; padding-top:5mm; border-top:1px solid #e7dbd2; color:#725f56; font-size:2.8mm; }
+
+        .visual-product-page { padding:11mm 13mm 10mm; display:flex; flex-direction:column; }
+        .visual-product-header { display:flex; align-items:center; justify-content:space-between; padding-bottom:4mm; border-bottom:1px solid #eadfd7; }
+        .visual-product-header > div { text-align:right; display:flex; flex-direction:column; gap:1mm; }
+        .visual-product-header span { color:#ef7a00; font-size:2.4mm; font-weight:900; letter-spacing:.5mm; }
+        .visual-product-header small { color:#9b8c84; font-size:2.4mm; }
+        .visual-product-title { padding:6mm 0 5mm; display:flex; align-items:flex-start; justify-content:space-between; gap:8mm; }
+        .visual-product-title h2 { margin:0; color:#34251f; font-size:8mm; line-height:1.05; letter-spacing:-.25mm; }
+        .visual-product-title > small { flex:0 0 auto; color:#8a2a18; font-size:2.5mm; font-weight:900; }
+        .visual-product-codes { margin-top:2.5mm; display:flex; flex-wrap:wrap; gap:4mm; color:#84756d; font-size:2.4mm; }
+        .visual-product-codes b { color:#8a2a18; margin-right:1mm; }
+        .visual-photo-grid { flex:1; min-height:0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(3,minmax(0,1fr)); gap:4mm; }
+        .visual-photo-grid.count-1 { grid-template-columns:1fr; grid-template-rows:1fr; }
+        .visual-photo-grid.count-2 { grid-template-columns:repeat(2,1fr); grid-template-rows:1fr; }
+        .visual-photo-grid.count-3, .visual-photo-grid.count-4 { grid-template-rows:repeat(2,1fr); }
+        .visual-photo-card { min-height:0; margin:0; border:1px solid #e8ded7; border-radius:4mm; background:#fff; overflow:hidden; display:flex; flex-direction:column; }
+        .visual-photo-frame { flex:1; min-height:0; display:grid; place-items:center; padding:3mm; background:#fff; }
+        .visual-photo-frame img { width:100%; height:100%; min-height:0; object-fit:contain; }
+        .visual-photo-card figcaption { min-height:11mm; padding:2.5mm 3mm; border-top:1px solid #eee5df; display:flex; align-items:center; justify-content:space-between; gap:3mm; }
+        .visual-photo-card figcaption strong { color:#4a3730; font-size:2.7mm; line-height:1.15; }
+        .visual-photo-card figcaption span { color:#9a8b83; font-size:2.2mm; }
+        .visual-empty { flex:1; display:grid; place-items:center; border:1px dashed #dccfc6; border-radius:5mm; color:#9a8b83; font-size:3mm; }
+        .visual-product-footer { margin-top:4mm; padding-top:3mm; border-top:1px solid #eadfd7; display:flex; justify-content:space-between; gap:6mm; color:#9a8b83; font-size:2.2mm; }
         @media print {
+          .visual-cover-page, .visual-product-page {
+            margin: 0 !important;
+            width: 210mm !important;
+            height: 297mm !important;
+            min-height: 297mm !important;
+            max-height: 297mm !important;
+            overflow: hidden !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid-page !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+
           .cover-page {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
