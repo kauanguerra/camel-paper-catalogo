@@ -406,74 +406,60 @@ export default function CatalogPreviewPage() {
     return resolveCatalogVariantImage(images, productId, variantId);
   }
 
-  function getVisualCatalogImages(productId: string) {
-    const product = products.find((item) => item.id === productId);
-    if (!product) return [];
-
-    const result: Array<{
-      key: string;
-      image: ProductImage;
-      label: string;
-      variantName: string | null;
-      variant: ProductVariant | null;
-    }> = [];
+  function getVisualSharedImages(productId: string) {
+    // Fotos gerais não representam automaticamente uma cor específica.
     const seen = new Set<string>();
-
-    for (const item of getCatalogImages(productId)) {
-      if (seen.has(item.image.image_url)) continue;
+    return getCatalogImages(productId).filter((item) => {
+      if (item.image.variant_id || seen.has(item.image.image_url)) return false;
       seen.add(item.image.image_url);
-      result.push({
-        key: item.image.id,
-        image: item.image,
-        label: item.label,
-        variantName: variants.find((variant) => variant.id === item.image.variant_id)?.name || null,
-        variant: variants.find((variant) => variant.id === item.image.variant_id) || null,
+      return true;
+    }).slice(0, 4);
+  }
+
+  function getVisualCatalogImages(productId: string) {
+    const productVariants = getProductVariants(productId);
+    const gallery = getCatalogImages(productId);
+    const rank = (image: ProductImage) => {
+      if (image.catalog_slot === "product") return 0;
+      if (image.catalog_slot === "front") return 1;
+      if (image.is_primary) return 2;
+      if (image.catalog_slot === "detail") return 3;
+      return 4;
+    };
+
+    if (productVariants.length > 0) {
+      return productVariants.map((variant) => {
+        const candidates = images.filter((image) =>
+          image.product_id === productId && isCatalogReadyImage(image) &&
+          (image.variant_id === variant.id ||
+            (!image.variant_id && Boolean(variant.image_url) && image.image_url === variant.image_url))
+        ).sort((a, b) => rank(a) - rank(b));
+        const image: ProductImage | null = candidates[0] || null;
+        // Preserva a frente/apresentação (normalmente a caixa) ao lado do produto.
+        const secondary: ProductImage | null = candidates.find((candidate) =>
+          candidate.image_url !== image?.image_url && candidate.catalog_slot === "front"
+        ) || candidates.find((candidate) =>
+          candidate.image_url !== image?.image_url && candidate.catalog_slot === "back"
+        ) || candidates.find((candidate) => candidate.image_url !== image?.image_url) || null;
+        return { key: variant.id, image, secondary,
+          label: variant.color?.trim() || "Variação", variantName: variant.name, variant };
       });
     }
 
-    for (const variant of getProductVariants(productId)) {
-      const variantImages = images
-        .filter(
-          (image) =>
-            image.product_id === productId &&
-            image.variant_id === variant.id &&
-            isCatalogReadyImage(image)
-        )
-        .sort((a, b) => {
-          const rank = (image: ProductImage) => {
-            if (image.catalog_slot === "front") return 0;
-            if (image.is_primary) return 1;
-            if (image.catalog_slot === "product") return 2;
-            if (image.catalog_slot === "detail") return 3;
-            if (image.catalog_slot === "back") return 4;
-            return 5;
-          };
-          return rank(a) - rank(b);
-        });
-
-      for (const image of variantImages) {
-        if (seen.has(image.image_url)) continue;
-        seen.add(image.image_url);
-        result.push({
-          key: image.id,
-          image,
-          label:
-            image.catalog_slot === "front"
-              ? "Frente"
-              : image.catalog_slot === "back"
-                ? "Verso"
-                : image.catalog_slot === "detail"
-                  ? "Detalhe"
-                  : image.catalog_slot === "product"
-                    ? "Produto"
-                    : "Foto profissional",
-          variantName: variant.name,
-          variant,
-        });
-      }
-    }
-
-    return result;
+    // Mantém as fotos cadastradas de apresentação, produto, verso e detalhe.
+    const seen = new Set<string>();
+    return gallery.filter((item) => {
+      if (seen.has(item.image.image_url)) return false;
+      seen.add(item.image.image_url);
+      return true;
+    }).map((item) => ({
+      key: item.image.id,
+      image: item.image as ProductImage | null,
+      secondary: null as ProductImage | null,
+      label: item.label,
+      variantName: null as string | null,
+      variant: null as ProductVariant | null,
+    }));
   }
 
   function chunkVisualImages<T>(items: T[], size = 6) {
@@ -559,19 +545,15 @@ export default function CatalogPreviewPage() {
     img.dataset.pdfCompressed = "true";
   }
 
-  function splitVisualDescription(description: string | null) {
-    const text = (description || "").replace(/\s+/g, " ").trim();
-    if (!text) return ["Descrição não cadastrada."];
-    const chunks: string[] = [];
-    let rest = text;
-    while (rest.length > 600) {
-      const space = rest.lastIndexOf(" ", 600);
-      const end = space > 300 ? space : 600;
-      chunks.push(rest.slice(0, end).trim());
-      rest = rest.slice(end).trim();
-    }
-    if (rest) chunks.push(rest);
-    return chunks;
+  function getVisualDescription(description: string | null) {
+    const text = (description || "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/[*#_`]/g, "")
+      .replace(/\s+/g, " ").trim();
+    if (text.length <= 280) return text;
+    const cut = text.slice(0, 280);
+    const space = cut.lastIndexOf(" ");
+    return `${cut.slice(0, space > 180 ? space : 280).trim()}…`;
   }
 
   async function prepareVisualCatalog() {
@@ -1472,16 +1454,14 @@ export default function CatalogPreviewPage() {
 
             {catalogSections.flatMap((section) => section.products).flatMap((product, productIndex) => {
               const visualImages = getVisualCatalogImages(product.id);
-              const photoPages = chunkVisualImages(visualImages, 6);
-              const descriptionPages = splitVisualDescription(product.description);
-              const imagePages = Array.from(
-                { length: Math.max(photoPages.length, descriptionPages.length) },
-                (_, index) => photoPages[index] || []
-              );
+              const imagePages = chunkVisualImages(visualImages, 6);
+              const summary = getVisualDescription(product.description);
+              const hasVariants = getProductVariants(product.id).length > 0;
               const catalogGroup = getCatalogGroup(product);
+              const sharedImages = hasVariants ? getVisualSharedImages(product.id) : [];
 
               return imagePages.map((pageImages, imagePageIndex) => (
-                <section className="visual-product-page print-page" key={`${product.id}-visual-${imagePageIndex}`}>
+                <section className={`visual-product-page print-page ${hasVariants ? "visual-variants-page" : ""} ${sharedImages.length ? "visual-has-shared" : ""} ${pageImages.every((item) => !item.image) ? "visual-text-options" : ""}`} key={`${product.id}-visual-${imagePageIndex}`}>
                   <header className="visual-product-header">
                     <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={145} height={56} />
                     <div>
@@ -1493,24 +1473,51 @@ export default function CatalogPreviewPage() {
                   <div className="visual-product-title">
                     <div>
                       <h2>{product.name}</h2>
-                      <div className="visual-product-codes">
-                        <span><b>SKU do produto</b> {product.sku?.trim() || "Não cadastrado"}</span>
-                        <span><b>Código de barras</b> {product.barcode?.trim() || "Não cadastrado"}</span>
-                      </div>
+                      {hasVariants ? (
+                        <div className="visual-product-codes"><span><b>{visualImages.length} variações disponíveis</b> • Identificação abaixo de cada opção</span></div>
+                      ) : (
+                        <div className="visual-product-codes">
+                          <span><b>SKU</b> {product.sku?.trim() || "Não cadastrado"}</span>
+                          <span><b>Código de barras</b> {product.barcode?.trim() || "Não cadastrado"}</span>
+                        </div>
+                      )}
                     </div>
                     {imagePages.length > 1 && <small>Página {imagePageIndex + 1}/{imagePages.length}</small>}
                   </div>
 
-                  <div className="visual-description">
-                    <b>{imagePageIndex > 0 && descriptionPages[imagePageIndex] ? "Descrição - continuação" : "Descrição"}</b>
-                    <p>{descriptionPages[imagePageIndex] || descriptionPages[0]}</p>
-                  </div>
+                  {summary && imagePageIndex === 0 && (
+                    <div className="visual-description"><p>{summary}</p></div>
+                  )}
+                  {hasVariants && sharedImages.length > 0 && (
+                    <div className="visual-shared-block">
+                      <div className="visual-shared-heading"><b>APRESENTAÇÃO DO PRODUTO</b><span>Fotos gerais • variações identificadas abaixo</span></div>
+                      <div className="visual-shared-gallery">
+                        {sharedImages.map((entry) => (
+                          <figure key={entry.image.id}>
+                            <img
+                              src={getOptimizedCatalogImageUrl(entry.image.image_url, 1000, 72)}
+                              crossOrigin="anonymous" data-pdf-max-side="1000"
+                              data-original-src={entry.image.image_url}
+                              alt={`${product.name} - ${entry.label} (foto geral)`}
+                              loading="eager" decoding="async"
+                            />
+                            <figcaption>{entry.label}</figcaption>
+                          </figure>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {product.package_quantity != null && product.package_quantity > 0 && (
+                    <div className="visual-package-info">Embalagem cadastrada: <b>{product.package_quantity} {product.package_unit || "unidades"}</b></div>
+                  )}
+                  {hasVariants && <div className="visual-options-heading">VARIAÇÕES DISPONÍVEIS <span>{imagePageIndex * 6 + 1}–{Math.min((imagePageIndex + 1) * 6, visualImages.length)} de {visualImages.length}</span></div>}
 
                   {pageImages.length > 0 ? (
-                    <div className={`visual-photo-grid count-${pageImages.length}`}>
+                    <div className={`visual-photo-grid count-${pageImages.length} ${pageImages.every((item) => !item.image) ? "text-only-grid" : ""}`}>
                       {pageImages.map((item, photoIndex) => (
-                        <figure className={`visual-photo-card ${imagePageIndex === 0 && photoIndex === 0 ? "featured" : ""}`} key={item.key}>
-                          <div className="visual-photo-frame">
+                        <figure className={`visual-photo-card ${!item.image ? "without-photo" : ""} ${imagePageIndex === 0 && photoIndex === 0 ? "featured" : ""}`} key={item.key}>
+                          <div className={`visual-photo-frame ${item.secondary ? "with-pair" : ""}`}>
+                            {item.image ? (
                             <img
                               src={getOptimizedCatalogImageUrl(item.image.image_url, pageImages.length <= 2 ? 1400 : 1000, 72)}
                               crossOrigin="anonymous"
@@ -1520,10 +1527,20 @@ export default function CatalogPreviewPage() {
                               loading="eager"
                               decoding="async"
                             />
+                             ) : <div className="visual-no-photo">{sharedImages.length ? "Consulte a apresentação geral acima" : "Foto específica indisponível"}</div>}
+                            {item.secondary && (
+                              <img
+                                src={getOptimizedCatalogImageUrl(item.secondary.image_url, 1000, 72)}
+                                crossOrigin="anonymous" data-pdf-max-side="1000"
+                                data-original-src={item.secondary.image_url}
+                                alt={`${product.name} - ${item.variantName || item.label} - apresentação complementar`}
+                                loading="eager" decoding="async"
+                              />
+                            )}
                           </div>
                           <figcaption>
                             <strong>{item.variantName || item.label}</strong>
-                            <span>{item.label}</span>
+                            {item.label !== item.variantName && <span>{item.label}</span>}
                             <small><b>SKU{item.variant ? " da variação" : ""}:</b> {(item.variant ? item.variant.sku : product.sku)?.trim() || "Não cadastrado"}</small>
                             <small><b>Cód. barras:</b> {(item.variant ? item.variant.barcode : product.barcode)?.trim() || "Não cadastrado"}</small>
                           </figcaption>
@@ -1531,7 +1548,7 @@ export default function CatalogPreviewPage() {
                       ))}
                     </div>
                   ) : (
-                    <div className="visual-empty">{visualImages.length ? "Continuação da descrição do produto." : "Imagens profissionais em preparação."}</div>
+                    <div className="visual-empty">Imagens profissionais em preparação.</div>
                   )}
 
                   <footer className="visual-product-footer">
@@ -4011,6 +4028,27 @@ export default function CatalogPreviewPage() {
         .visual-product-title > small { flex:0 0 auto; color:#8a2a18; font-size:2.5mm; font-weight:900; }
         .visual-product-codes { margin-top:2.5mm; display:flex; flex-wrap:wrap; gap:4mm; color:#84756d; font-size:2.4mm; }
         .visual-product-codes b { color:#8a2a18; margin-right:1mm; }
+        .visual-shared-block { flex:0 0 auto; margin-bottom:3mm; }
+        .visual-shared-heading { display:flex; justify-content:space-between; gap:3mm; color:#8a2a18; font-size:2.3mm; margin-bottom:2mm; }
+        .visual-shared-heading span { color:#84756d; }
+        .visual-shared-gallery { display:flex; height:55mm; gap:3mm; }
+        .visual-shared-gallery figure { flex:1; min-width:0; margin:0; display:flex; flex-direction:column; border:0.3mm solid #eee2d9; border-radius:3mm; padding:2mm; }
+        .visual-shared-gallery img { width:100%; height:0; flex:1; min-height:0; object-fit:contain; }
+        .visual-shared-gallery figcaption { text-align:center; color:#8b7568; font-size:2.2mm; padding-top:1mm; }
+        .visual-text-options .visual-shared-gallery { height:95mm; }
+        .visual-photo-grid.text-only-grid { flex:0 0 auto; grid-template-rows:none; grid-auto-rows:auto; }
+        .visual-text-options .visual-product-footer { margin-top:auto; }
+        .visual-package-info { font-size:2.7mm; color:#74543e; padding:2mm 0 3mm; }
+        .visual-photo-frame.with-pair { grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:2mm; }
+        .visual-photo-frame.with-pair img { min-width:0; }
+        .visual-photo-card.without-photo .visual-photo-frame { flex:0 0 auto; }
+        .visual-photo-card.without-photo .visual-no-photo { padding:1mm; font-size:2.2mm; }
+        .visual-options-heading { margin:0 0 4mm; padding:3mm 0; border-top:0.3mm solid #e8ded7; color:#b94b0d; font-weight:800; font-size:2.8mm; letter-spacing:0.4mm; display:flex; justify-content:space-between; }
+        .visual-options-heading span { color:#796a60; letter-spacing:0; font-weight:500; }
+        .visual-no-photo { color:#9b8c84; font-size:3mm; text-align:center; padding:5mm; }
+        .visual-variants-page .visual-photo-card { border-radius:3mm; border-color:#eadbd0; }
+        .visual-variants-page .visual-photo-card figcaption { background:#fff9f3; border-top:0.6mm solid #ed8a32; }
+        .visual-variants-page .visual-photo-card figcaption strong { font-size:3.8mm; color:#543528; }
         .visual-description { margin:0 0 4mm; color:#53453d; font-size:2.8mm; line-height:1.4; overflow-wrap:anywhere; }
         .visual-description > b { color:#8a2a18; font-size:2.4mm; text-transform:uppercase; }
         .visual-description p { margin:1mm 0 0; white-space:pre-line; }
