@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
@@ -157,6 +157,26 @@ export default function CatalogPreviewPage() {
   const [openResponseId, setOpenResponseId] = useState<string | null>(null);
   const [printResponseId, setPrintResponseId] = useState<string | null>(null);
   const [visualCatalogMode, setVisualCatalogMode] = useState(false);
+  const [visualPreparing, setVisualPreparing] = useState(false);
+  const [visualReady, setVisualReady] = useState(false);
+  const [visualLoadProgress, setVisualLoadProgress] = useState({ loaded: 0, total: 0 });
+  const [visualLoadError, setVisualLoadError] = useState("");
+  const catalogDocumentRef = useRef<HTMLElement | null>(null);
+  const visualPreparationRef = useRef(false);
+  const visualRunRef = useRef(0);
+  const visualJpegCacheRef = useRef(new Map<string, string>());
+
+  useEffect(() => {
+    if (visualCatalogMode) void prepareVisualCatalog();
+    return () => {
+      visualJpegCacheRef.current.clear();
+      visualRunRef.current += 1;
+      visualPreparationRef.current = false;
+    };
+    // A preparação começa após o React montar o documento visual.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visualCatalogMode, catalogId]);
+
 
   useEffect(() => {
     if (!catalogId) return;
@@ -395,6 +415,7 @@ export default function CatalogPreviewPage() {
       image: ProductImage;
       label: string;
       variantName: string | null;
+      variant: ProductVariant | null;
     }> = [];
     const seen = new Set<string>();
 
@@ -405,7 +426,8 @@ export default function CatalogPreviewPage() {
         key: item.image.id,
         image: item.image,
         label: item.label,
-        variantName: null,
+        variantName: variants.find((variant) => variant.id === item.image.variant_id)?.name || null,
+        variant: variants.find((variant) => variant.id === item.image.variant_id) || null,
       });
     }
 
@@ -446,6 +468,7 @@ export default function CatalogPreviewPage() {
                     ? "Produto"
                     : "Foto profissional",
           variantName: variant.name,
+          variant,
         });
       }
     }
@@ -459,6 +482,194 @@ export default function CatalogPreviewPage() {
       chunks.push(items.slice(index, index + size));
     }
     return chunks.length > 0 ? chunks : [[]];
+  }
+
+  function isRenderedImageReady(img: HTMLImageElement) {
+    return img.isConnected && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
+  }
+
+  async function validateRenderedImage(img: HTMLImageElement, retryUrl?: string) {
+    // Os listeners são registrados antes de trocar a URL para não perder o load.
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let decoding = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        img.removeEventListener("load", check);
+        img.removeEventListener("error", onError);
+        if (error) reject(error);
+        else resolve();
+      };
+      const onError = () => finish(new Error("Falha ao carregar imagem do documento"));
+      const check = async () => {
+        if (settled || decoding) return;
+        if (!isRenderedImageReady(img)) {
+          if (img.complete) onError();
+          return;
+        }
+        decoding = true;
+        try {
+          if (typeof img.decode === "function") await img.decode();
+          if (!isRenderedImageReady(img)) throw new Error("Imagem inválida após decode");
+          finish();
+        } catch {
+          finish(new Error("Falha ao decodificar imagem do documento"));
+        }
+      };
+      const timer = setTimeout(() => finish(new Error("Tempo limite de carregamento")), 20000);
+      img.addEventListener("load", check);
+      img.addEventListener("error", onError);
+      img.loading = "eager";
+      if (retryUrl) {
+        img.removeAttribute("srcset");
+        img.removeAttribute("src");
+        img.src = retryUrl;
+      }
+      void check();
+    });
+  }
+
+  async function compressVisualImage(img: HTMLImageElement) {
+    if (!img.dataset.originalSrc) return;
+    if (img.dataset.pdfCompressed === "true" && img.src.startsWith("data:image/jpeg")) return;
+    delete img.dataset.pdfCompressed;
+    const maxSide = Number(img.dataset.pdfMaxSide) || 1000;
+    const key = `${img.dataset.originalSrc}|${maxSide}`;
+    let jpeg = visualJpegCacheRef.current.get(key);
+    if (!jpeg) {
+      const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Não foi possível preparar a imagem leve");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(img, 0, 0, canvas.width, canvas.height);
+      // JPEG com fundo branco evita incorporar PNGs enormes ou transparência no PDF.
+      jpeg = canvas.toDataURL("image/jpeg", 0.72);
+      if (!jpeg.startsWith("data:image/jpeg")) throw new Error("Conversão JPEG indisponível");
+      visualJpegCacheRef.current.set(key, jpeg);
+      canvas.width = 1;
+      canvas.height = 1;
+    }
+    await validateRenderedImage(img, jpeg);
+    img.dataset.pdfCompressed = "true";
+  }
+
+  function splitVisualDescription(description: string | null) {
+    const text = (description || "").replace(/\s+/g, " ").trim();
+    if (!text) return ["Descrição não cadastrada."];
+    const chunks: string[] = [];
+    let rest = text;
+    while (rest.length > 600) {
+      const space = rest.lastIndexOf(" ", 600);
+      const end = space > 300 ? space : 600;
+      chunks.push(rest.slice(0, end).trim());
+      rest = rest.slice(end).trim();
+    }
+    if (rest) chunks.push(rest);
+    return chunks;
+  }
+
+  async function prepareVisualCatalog() {
+    if (visualPreparationRef.current) return false;
+    const root = catalogDocumentRef.current;
+    if (!root || !root.classList.contains("visual-catalog-document")) return false;
+
+    visualPreparationRef.current = true;
+    const run = ++visualRunRef.current;
+    const isCurrent = () => visualRunRef.current === run && catalogDocumentRef.current === root && root.isConnected;
+    setVisualPreparing(true);
+    setVisualReady(false);
+    setVisualLoadError("");
+    // Inclui fotos e marcas que realmente serão impressas, inclusive URLs repetidas.
+    const elements = Array.from(root.querySelectorAll<HTMLImageElement>("img"));
+    setVisualLoadProgress({ loaded: 0, total: elements.length });
+    let cursor = 0;
+    let loaded = 0;
+    const failed: HTMLImageElement[] = [];
+
+    async function worker() {
+      while (isCurrent()) {
+        const img = elements[cursor++];
+        if (!img) return;
+        const currentUrl = img.currentSrc || img.src;
+        const originalUrl = img.dataset.originalSrc || currentUrl;
+        let valid = false;
+        // Valida o elemento atual, repete sua URL e por fim tenta a foto original.
+        for (let attempt = 0; attempt < 3 && isCurrent(); attempt += 1) {
+          try {
+            await validateRenderedImage(img, attempt === 0 ? undefined : attempt === 1 ? currentUrl : originalUrl);
+            await compressVisualImage(img);
+            valid = true;
+            break;
+          } catch {
+            if (attempt < 2 && isCurrent()) {
+              await new Promise((resolve) => setTimeout(resolve, 450 * (attempt + 1)));
+            }
+          }
+        }
+        if (!isCurrent()) return;
+        if (valid) loaded += 1;
+        else failed.push(img);
+        setVisualLoadProgress({ loaded, total: elements.length });
+      }
+    }
+
+    try {
+      await Promise.all(Array.from({ length: Math.min(6, Math.max(1, elements.length)) }, () => worker()));
+      if (!isCurrent()) return false;
+      const currentElements = Array.from(root.querySelectorAll<HTMLImageElement>("img"));
+      const invalid = currentElements.filter((img) => !isRenderedImageReady(img));
+      const changed = currentElements.length !== elements.length || currentElements.some((img, index) => img !== elements[index]);
+      if (failed.length || invalid.length || changed) {
+        const count = new Set([...failed, ...invalid]).size;
+        const names = Array.from(new Set([...failed, ...invalid].map((img) => img.alt))).filter(Boolean).slice(0, 3);
+        setVisualLoadError(changed
+          ? "O documento mudou durante a preparação. Prepare novamente antes de imprimir."
+          : `${count} imagem(ns) do documento ainda não estão prontas. ${names.join("; ")}. Tente novamente antes de salvar o PDF. Se persistir, verifique o acesso às imagens (CORS) para permitir a versão leve.`);
+        return false;
+      }
+      setVisualReady(true);
+      return true;
+    } catch {
+      if (isCurrent()) setVisualLoadError("Não foi possível validar o documento. Tente novamente.");
+      return false;
+    } finally {
+      if (isCurrent()) {
+        visualPreparationRef.current = false;
+        setVisualPreparing(false);
+      }
+    }
+  }
+
+  function enableVisualCatalog() {
+    if (visualPreparationRef.current) return;
+    setVisualReady(false);
+    setVisualLoadError("");
+    setVisualCatalogMode((current) => !current);
+  }
+
+  async function printCatalog() {
+    if (!visualCatalogMode) {
+      window.print();
+      return;
+    }
+    // visualReady é apenas feedback; toda impressão revalida o DOM atual.
+    const ready = await prepareVisualCatalog();
+    if (!ready) return;
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const root = catalogDocumentRef.current;
+    if (!root || !root.classList.contains("visual-catalog-document")) return;
+    if (Array.from(root.querySelectorAll<HTMLImageElement>("img")).some((img) => !isRenderedImageReady(img))) {
+      setVisualReady(false);
+      setVisualLoadError("Uma imagem deixou de estar pronta. Prepare novamente antes de imprimir.");
+      return;
+    }
+    window.print();
   }
 
   function getPublicCatalogUrl() {
@@ -773,6 +984,38 @@ export default function CatalogPreviewPage() {
 
   return (
     <main className="preview-shell">
+      {visualCatalogMode && (visualPreparing || visualLoadError) && (
+        <div className="visual-loading-overlay no-print">
+          <div className="visual-loading-card">
+            <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={150} height={58} priority />
+            {visualPreparing ? (
+              <>
+                <div className="visual-loading-spinner" />
+                <h2>Preparando catálogo de fotos</h2>
+                <p>Carregando e validando todas as imagens antes de liberar o PDF.</p>
+                <div className="visual-loading-progress">
+                  <div
+                    style={{
+                      width: `${visualLoadProgress.total > 0 ? Math.round((visualLoadProgress.loaded / visualLoadProgress.total) * 100) : 0}%`,
+                    }}
+                  />
+                </div>
+                <strong>
+                  {visualLoadProgress.loaded} de {visualLoadProgress.total} imagens
+                </strong>
+                <small>Não feche esta página. O PDF será liberado após validar as imagens do documento.</small>
+              </>
+            ) : (
+              <>
+                <h2>Algumas imagens não carregaram</h2>
+                <p>{visualLoadError}</p>
+                <button type="button" onClick={prepareVisualCatalog}>Tentar novamente</button>
+                <button type="button" className="visual-loading-cancel" onClick={() => { setVisualCatalogMode(false); setVisualReady(false); setVisualLoadError(""); }}>Voltar</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       <div className="toolbar no-print">
         <div>
           <Link href="/catalogos"><ArrowLeft size={15} /> Voltar aos catálogos</Link>
@@ -806,12 +1049,19 @@ export default function CatalogPreviewPage() {
           <button
             type="button"
             className={`visual-mode-button ${visualCatalogMode ? "active" : ""}`}
-            onClick={() => setVisualCatalogMode((current) => !current)}
+            onClick={enableVisualCatalog}
+            disabled={visualPreparing}
           >
             {visualCatalogMode ? "✓ Catálogo só fotos" : "Catálogo só fotos"}
           </button>
-          <button type="button" className="print-button" onClick={() => window.print()}>
-            {visualCatalogMode ? "Salvar PDF só fotos" : "Imprimir / Salvar PDF"}
+          <button type="button" className="print-button" onClick={printCatalog} disabled={visualPreparing}>
+            {visualCatalogMode
+              ? visualPreparing
+                ? `Preparando ${visualLoadProgress.loaded}/${visualLoadProgress.total}`
+                : visualReady
+                  ? "Salvar PDF só fotos"
+                  : "Preparar PDF só fotos"
+              : "Imprimir / Salvar PDF"}
           </button>
         </div>
       </div>
@@ -1199,7 +1449,11 @@ export default function CatalogPreviewPage() {
         );
       })()}
 
-      <section className={`catalog-document ${visualCatalogMode ? "visual-catalog-document" : ""}`}>
+      <section
+        ref={catalogDocumentRef}
+        onErrorCapture={() => { if (visualCatalogMode) setVisualReady(false); }}
+        className={`catalog-document ${visualCatalogMode ? "visual-catalog-document" : ""}`}
+      >
         {visualCatalogMode ? (
           <>
             <section className="visual-cover-page print-page">
@@ -1216,9 +1470,14 @@ export default function CatalogPreviewPage() {
               <footer><span>Camel Paper</span><strong>camelpaper.com.br</strong></footer>
             </section>
 
-            {products.flatMap((product, productIndex) => {
+            {catalogSections.flatMap((section) => section.products).flatMap((product, productIndex) => {
               const visualImages = getVisualCatalogImages(product.id);
-              const imagePages = chunkVisualImages(visualImages, 6);
+              const photoPages = chunkVisualImages(visualImages, 6);
+              const descriptionPages = splitVisualDescription(product.description);
+              const imagePages = Array.from(
+                { length: Math.max(photoPages.length, descriptionPages.length) },
+                (_, index) => photoPages[index] || []
+              );
               const catalogGroup = getCatalogGroup(product);
 
               return imagePages.map((pageImages, imagePageIndex) => (
@@ -1226,7 +1485,7 @@ export default function CatalogPreviewPage() {
                   <header className="visual-product-header">
                     <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={145} height={56} />
                     <div>
-                      <span>{catalogGroup?.name || "PRODUTO CAMEL PAPER"}</span>
+                      <span>{catalogGroup?.name || "Outros"}</span>
                       <small>{String(productIndex + 1).padStart(2, "0")} / {String(products.length).padStart(2, "0")}</small>
                     </div>
                   </header>
@@ -1235,11 +1494,16 @@ export default function CatalogPreviewPage() {
                     <div>
                       <h2>{product.name}</h2>
                       <div className="visual-product-codes">
-                        {product.sku && <span><b>SKU</b> {product.sku}</span>}
-                        {product.barcode && <span><b>EAN</b> {product.barcode}</span>}
+                        <span><b>SKU do produto</b> {product.sku?.trim() || "Não cadastrado"}</span>
+                        <span><b>Código de barras</b> {product.barcode?.trim() || "Não cadastrado"}</span>
                       </div>
                     </div>
-                    {imagePages.length > 1 && <small>Fotos {imagePageIndex + 1}/{imagePages.length}</small>}
+                    {imagePages.length > 1 && <small>Página {imagePageIndex + 1}/{imagePages.length}</small>}
+                  </div>
+
+                  <div className="visual-description">
+                    <b>{imagePageIndex > 0 && descriptionPages[imagePageIndex] ? "Descrição - continuação" : "Descrição"}</b>
+                    <p>{descriptionPages[imagePageIndex] || descriptionPages[0]}</p>
                   </div>
 
                   {pageImages.length > 0 ? (
@@ -1248,21 +1512,26 @@ export default function CatalogPreviewPage() {
                         <figure className={`visual-photo-card ${imagePageIndex === 0 && photoIndex === 0 ? "featured" : ""}`} key={item.key}>
                           <div className="visual-photo-frame">
                             <img
-                              src={getOptimizedCatalogImageUrl(item.image.image_url, imagePageIndex === 0 && photoIndex === 0 ? 1100 : 720, 82)}
+                              src={getOptimizedCatalogImageUrl(item.image.image_url, pageImages.length <= 2 ? 1400 : 1000, 72)}
+                              crossOrigin="anonymous"
+                              data-pdf-max-side={pageImages.length <= 2 ? 1400 : 1000}
+                              data-original-src={item.image.image_url}
                               alt={`${product.name} - ${item.variantName || item.label}`}
-                              loading="lazy"
+                              loading="eager"
                               decoding="async"
                             />
                           </div>
                           <figcaption>
                             <strong>{item.variantName || item.label}</strong>
-                            {item.variantName && <span>{item.label}</span>}
+                            <span>{item.label}</span>
+                            <small><b>SKU{item.variant ? " da variação" : ""}:</b> {(item.variant ? item.variant.sku : product.sku)?.trim() || "Não cadastrado"}</small>
+                            <small><b>Cód. barras:</b> {(item.variant ? item.variant.barcode : product.barcode)?.trim() || "Não cadastrado"}</small>
                           </figcaption>
                         </figure>
                       ))}
                     </div>
                   ) : (
-                    <div className="visual-empty">Imagens profissionais em preparação.</div>
+                    <div className="visual-empty">{visualImages.length ? "Continuação da descrição do produto." : "Imagens profissionais em preparação."}</div>
                   )}
 
                   <footer className="visual-product-footer">
@@ -1699,7 +1968,7 @@ export default function CatalogPreviewPage() {
                                 productsPerPage === 2 ? 76 : 72
                               )}
                               alt={product.name}
-                              loading="lazy"
+                              loading="eager"
                               decoding="async"
                             />
                           ) : (
@@ -3732,16 +4001,21 @@ export default function CatalogPreviewPage() {
         .visual-cover-count span { color:#76675f; font-size:3mm; font-weight:800; }
         .visual-cover-page > footer { display:flex; justify-content:space-between; padding-top:5mm; border-top:1px solid #e7dbd2; color:#725f56; font-size:2.8mm; }
 
-        .visual-product-page { padding:11mm 13mm 10mm; display:flex; flex-direction:column; }
+        .visual-product-page { height:297mm; padding:11mm 13mm 10mm; display:flex; flex-direction:column; }
         .visual-product-header { display:flex; align-items:center; justify-content:space-between; padding-bottom:4mm; border-bottom:1px solid #eadfd7; }
         .visual-product-header > div { text-align:right; display:flex; flex-direction:column; gap:1mm; }
         .visual-product-header span { color:#ef7a00; font-size:2.4mm; font-weight:900; letter-spacing:.5mm; }
         .visual-product-header small { color:#9b8c84; font-size:2.4mm; }
         .visual-product-title { padding:6mm 0 5mm; display:flex; align-items:flex-start; justify-content:space-between; gap:8mm; }
-        .visual-product-title h2 { margin:0; color:#34251f; font-size:8mm; line-height:1.05; letter-spacing:-.25mm; }
+        .visual-product-title h2 { margin:0; color:#34251f; font-size:7mm; line-height:1.05; letter-spacing:-.25mm; }
         .visual-product-title > small { flex:0 0 auto; color:#8a2a18; font-size:2.5mm; font-weight:900; }
         .visual-product-codes { margin-top:2.5mm; display:flex; flex-wrap:wrap; gap:4mm; color:#84756d; font-size:2.4mm; }
         .visual-product-codes b { color:#8a2a18; margin-right:1mm; }
+        .visual-description { margin:0 0 4mm; color:#53453d; font-size:2.8mm; line-height:1.4; overflow-wrap:anywhere; }
+        .visual-description > b { color:#8a2a18; font-size:2.4mm; text-transform:uppercase; }
+        .visual-description p { margin:1mm 0 0; white-space:pre-line; }
+        .visual-product-title h2 { overflow-wrap:anywhere; }
+        .visual-photo-card figcaption small { color:#53453d; font-size:2.4mm; line-height:1.3; overflow-wrap:anywhere; }
         .visual-photo-grid { flex:1; min-height:0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(3,minmax(0,1fr)); gap:4mm; }
         .visual-photo-grid.count-1 { grid-template-columns:1fr; grid-template-rows:1fr; }
         .visual-photo-grid.count-2 { grid-template-columns:repeat(2,1fr); grid-template-rows:1fr; }
@@ -3749,11 +4023,67 @@ export default function CatalogPreviewPage() {
         .visual-photo-card { min-height:0; margin:0; border:1px solid #e8ded7; border-radius:4mm; background:#fff; overflow:hidden; display:flex; flex-direction:column; }
         .visual-photo-frame { flex:1; min-height:0; display:grid; place-items:center; padding:3mm; background:#fff; }
         .visual-photo-frame img { width:100%; height:100%; min-height:0; object-fit:contain; }
-        .visual-photo-card figcaption { min-height:11mm; padding:2.5mm 3mm; border-top:1px solid #eee5df; display:flex; align-items:center; justify-content:space-between; gap:3mm; }
+        .visual-photo-card figcaption { min-height:19mm; padding:2mm 3mm; border-top:1px solid #eee5df; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:0.7mm; }
         .visual-photo-card figcaption strong { color:#4a3730; font-size:2.7mm; line-height:1.15; }
         .visual-photo-card figcaption span { color:#9a8b83; font-size:2.2mm; }
         .visual-empty { flex:1; display:grid; place-items:center; border:1px dashed #dccfc6; border-radius:5mm; color:#9a8b83; font-size:3mm; }
         .visual-product-footer { margin-top:4mm; padding-top:3mm; border-top:1px solid #eadfd7; display:flex; justify-content:space-between; gap:6mm; color:#9a8b83; font-size:2.2mm; }
+
+        .visual-loading-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 9999;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 24px;
+          background: rgba(246, 242, 238, 0.96);
+          backdrop-filter: blur(10px);
+        }
+
+        .visual-loading-card {
+          width: min(460px, 100%);
+          padding: 34px;
+          border: 1px solid #eadfd7;
+          border-radius: 24px;
+          background: #fff;
+          box-shadow: 0 24px 70px rgba(73, 39, 24, 0.14);
+          text-align: center;
+        }
+
+        .visual-loading-card h2 { margin: 18px 0 8px; color: #35241c; font-size: 22px; }
+        .visual-loading-card p { margin: 0 auto 20px; color: #75675f; line-height: 1.5; }
+        .visual-loading-card strong { display: block; margin-top: 12px; color: #9f2e18; }
+        .visual-loading-card small { display: block; margin-top: 8px; color: #9b8f88; }
+        .visual-loading-card button { margin-top: 14px; border: 0; border-radius: 10px; padding: 11px 18px; background: #9f2e18; color: #fff; font-weight: 800; cursor: pointer; }
+        .visual-loading-card .visual-loading-cancel { margin-left: 8px; background: #eee7e2; color: #5a463b; }
+
+        .visual-loading-spinner {
+          width: 34px;
+          height: 34px;
+          margin: 18px auto 0;
+          border: 3px solid #f1dfd5;
+          border-top-color: #ef7600;
+          border-radius: 999px;
+          animation: visualSpin .8s linear infinite;
+        }
+
+        .visual-loading-progress {
+          height: 9px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: #f0e8e3;
+        }
+
+        .visual-loading-progress > div {
+          height: 100%;
+          border-radius: inherit;
+          background: linear-gradient(90deg, #9f2e18, #ef7600);
+          transition: width .2s ease;
+        }
+
+        @keyframes visualSpin { to { transform: rotate(360deg); } }
+
         @media print {
           .visual-cover-page, .visual-product-page {
             margin: 0 !important;
