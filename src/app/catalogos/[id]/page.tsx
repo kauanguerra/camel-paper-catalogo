@@ -34,6 +34,7 @@ type Catalog = {
 type Product = {
   id: string;
   name: string;
+  category_id: string | null;
   sku: string | null;
   barcode: string | null;
   description: string | null;
@@ -72,6 +73,11 @@ type CatalogGroup = {
   id: string;
   name: string;
   position: number;
+};
+
+type ProductCategory = {
+  id: string;
+  name: string;
 };
 
 type CatalogProductView = Product & {
@@ -145,6 +151,7 @@ export default function CatalogPreviewPage() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [products, setProducts] = useState<CatalogProductView[]>([]);
   const [catalogGroups, setCatalogGroups] = useState<CatalogGroup[]>([]);
+  const [productCategories, setProductCategories] = useState<ProductCategory[]>([]);
   const [images, setImages] = useState<ProductImage[]>([]);
   const [variants, setVariants] = useState<ProductVariant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -184,7 +191,7 @@ export default function CatalogPreviewPage() {
     async function loadCatalog() {
       setLoading(true);
 
-      const [catalogResult, itemsResult, groupsResult] = await Promise.all([
+      const [catalogResult, itemsResult, groupsResult, categoriesResult] = await Promise.all([
         supabase
           .from("catalogs")
           .select(
@@ -208,6 +215,7 @@ export default function CatalogPreviewPage() {
             products (
               id,
               name,
+              category_id,
               sku,
               barcode,
               description,
@@ -239,6 +247,12 @@ export default function CatalogPreviewPage() {
           .select("id, name, position")
           .eq("active", true)
           .order("position")
+          .order("name"),
+
+        supabase
+          .from("categories")
+          .select("id, name")
+          .eq("active", true)
           .order("name"),
       ]);
 
@@ -272,6 +286,10 @@ export default function CatalogPreviewPage() {
 
       if (!groupsResult.error) {
         setCatalogGroups((groupsResult.data || []) as CatalogGroup[]);
+      }
+
+      if (!categoriesResult.error) {
+        setProductCategories((categoriesResult.data || []) as ProductCategory[]);
       }
 
       if (normalizedProducts.length > 0) {
@@ -399,6 +417,11 @@ export default function CatalogPreviewPage() {
     return resolveCatalogGallery(images, productId);
   }
 
+  function isPackagingImage(image: ProductImage) {
+    return [image.catalog_slot, image.image_type, image.source]
+      .some((value) => /embal|packag|package|box|caixa/i.test(value || ""));
+  }
+
   function getVariantImage(
     productId: string,
     variantId: string
@@ -413,6 +436,17 @@ export default function CatalogPreviewPage() {
       if (item.image.variant_id || seen.has(item.image.image_url)) return false;
       seen.add(item.image.image_url);
       return true;
+    }).sort((a, b) => {
+      const rank = (image: ProductImage) => {
+        if (image.catalog_slot === "product") return 0;
+        if (image.is_primary) return 1;
+        if (image.catalog_slot === "front") return 2;
+        if (isPackagingImage(image)) return 3;
+        if (image.catalog_slot === "back") return 4;
+        if (image.catalog_slot === "detail") return 5;
+        return 6;
+      };
+      return rank(a.image) - rank(b.image);
     }).slice(0, 4);
   }
 
@@ -421,10 +455,12 @@ export default function CatalogPreviewPage() {
     const gallery = getCatalogImages(productId);
     const rank = (image: ProductImage) => {
       if (image.catalog_slot === "product") return 0;
-      if (image.catalog_slot === "front") return 1;
-      if (image.is_primary) return 2;
-      if (image.catalog_slot === "detail") return 3;
-      return 4;
+      if (image.is_primary) return 1;
+      if (image.catalog_slot === "front") return 2;
+      if (isPackagingImage(image)) return 3;
+      if (image.catalog_slot === "back") return 4;
+      if (image.catalog_slot === "detail") return 5;
+      return 6;
     };
 
     if (productVariants.length > 0) {
@@ -437,6 +473,8 @@ export default function CatalogPreviewPage() {
         const image: ProductImage | null = candidates[0] || null;
         // Preserva a frente/apresentação (normalmente a caixa) ao lado do produto.
         const secondary: ProductImage | null = candidates.find((candidate) =>
+          candidate.image_url !== image?.image_url && isPackagingImage(candidate)
+        ) || candidates.find((candidate) =>
           candidate.image_url !== image?.image_url && candidate.catalog_slot === "front"
         ) || candidates.find((candidate) =>
           candidate.image_url !== image?.image_url && candidate.catalog_slot === "back"
@@ -783,6 +821,37 @@ export default function CatalogPreviewPage() {
     return catalogGroups.find((group) => group.id === product.catalog_group_id) || null;
   }
 
+  function normalizeVisualName(value: string) {
+    return value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLocaleLowerCase("pt-BR")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
+
+  function getVisualOptionTitle(variantName: string | null, label: string) {
+    const name = variantName?.trim() || "";
+    const option = label.trim();
+    const generic = /^(variacao|variante|opcao|cor)(\s+\d+)?$/;
+
+    if (name && !generic.test(normalizeVisualName(name))) return name;
+    if (option && !generic.test(normalizeVisualName(option))) return option;
+    return name || option || "Opção";
+  }
+
+  function getVisualOptionSubtitle(variantName: string | null, label: string) {
+    const name = variantName?.trim() || "";
+    const option = label.trim();
+    const normalizedOption = normalizeVisualName(option);
+    const generic = /^(variacao|variante|opcao|cor)(\s+\d+)?$/;
+
+    if (!option || generic.test(normalizedOption)) return null;
+    if (name && normalizeVisualName(name) === normalizedOption) return null;
+    if (name && !generic.test(normalizeVisualName(name))) return option;
+    return null;
+  }
+
   function getCommercialPrice(
     product: CatalogProductView,
     level: "unit" | "package" | "master"
@@ -845,6 +914,64 @@ export default function CatalogPreviewPage() {
         }]
       : []),
   ];
+
+  const inferVisualCategory = (productName: string) => {
+    const normalized = productName
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLocaleLowerCase("pt-BR");
+    const rules: Array<[string, string[]]> = [
+      ["Agendas", ["agenda"]],
+      ["Mochilas", ["mochila"]],
+      ["Cadernos", ["caderno"]],
+      ["Estojos", ["estojo"]],
+      ["Canetas e escrita", ["caneta", "lapis", "marcador", "marca-texto"]],
+      ["Papelaria", ["bloco adesivo", "post-it", "borracha", "apontador", "regua"]],
+      ["Brinquedos", ["brinquedo", "boneca", "carrinho", "massinha", "sorveteira"]],
+    ];
+    return rules.find(([, keywords]) => keywords.some((keyword) => normalized.includes(keyword)))?.[0] || "Outros";
+  };
+
+  // Produtos sem categoria cadastrada recebem uma categoria provável pelo nome.
+  // As categorias existentes no cadastro continuam tendo prioridade.
+  const unassignedVisualProducts = products.filter(
+    (product) => !product.category_id || !productCategories.some((category) => category.id === product.category_id)
+  );
+  const inferredVisualSections = Array.from(
+    unassignedVisualProducts.reduce((sections, product) => {
+      const categoryName = inferVisualCategory(product.name);
+      const sectionProducts = sections.get(categoryName) || [];
+      sectionProducts.push(product);
+      sections.set(categoryName, sectionProducts);
+      return sections;
+    }, new Map<string, CatalogProductView[]>())
+  ).map(([name, sectionProducts]) => ({
+    category: { id: `inferred-${name}`, name },
+    products: sectionProducts.sort((a, b) =>
+      a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base", numeric: true }) ||
+      a.catalog_position - b.catalog_position
+    ),
+  }));
+
+  // No PDF visual, separamos por categoria e organizamos produtos alfabeticamente.
+  const visualCatalogSections = [
+    ...productCategories
+      .map((category) => ({
+        category,
+        products: products
+          .filter((product) => product.category_id === category.id)
+          .sort((a, b) =>
+            a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base", numeric: true }) ||
+            a.catalog_position - b.catalog_position
+          ),
+      }))
+      .filter((section) => section.products.length > 0),
+    ...inferredVisualSections,
+  ].sort((a, b) => a.category.name.localeCompare(b.category.name, "pt-BR", { sensitivity: "base", numeric: true }));
+
+  const visualCatalogProducts = visualCatalogSections.flatMap((section) =>
+    section.products.map((product) => ({ section, product }))
+  );
 
   const productsPerPage: 1 | 2 | 4 =
     catalog?.products_per_page === 1 ||
@@ -1452,34 +1579,39 @@ export default function CatalogPreviewPage() {
               <footer><span>Camel Paper</span><strong>camelpaper.com.br</strong></footer>
             </section>
 
-            {catalogSections.flatMap((section) => section.products).flatMap((product, productIndex) => {
+            {visualCatalogProducts.map(({ section, product }, productIndex) => {
               const visualImages = getVisualCatalogImages(product.id);
               const imagePages = chunkVisualImages(visualImages, 6);
               const summary = getVisualDescription(product.description);
               const hasVariants = getProductVariants(product.id).length > 0;
-              const catalogGroup = getCatalogGroup(product);
               const sharedImages = hasVariants ? getVisualSharedImages(product.id) : [];
 
-              return imagePages.map((pageImages, imagePageIndex) => (
+              return imagePages.map((pageImages, imagePageIndex) => {
+                const pagePhotoEntries = pageImages.filter((item) => Boolean(item.image));
+                const pageTextEntries = pageImages.filter((item) => !item.image);
+
+                return (
                 <section className={`visual-product-page print-page ${hasVariants ? "visual-variants-page" : ""} ${sharedImages.length ? "visual-has-shared" : ""} ${pageImages.every((item) => !item.image) ? "visual-text-options" : ""}`} key={`${product.id}-visual-${imagePageIndex}`}>
                   <header className="visual-product-header">
                     <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={145} height={56} />
                     <div>
-                      <span>{catalogGroup?.name || "Outros"}</span>
+                      <span>{section.category.name}</span>
                       <small>{String(productIndex + 1).padStart(2, "0")} / {String(products.length).padStart(2, "0")}</small>
                     </div>
                   </header>
 
                   <div className="visual-product-title">
                     <div>
-                      <h2>{product.name}</h2>
+                      <h2>{product.name.replace(/[.!?;:,]+$/u, "")}</h2>
                       {hasVariants ? (
                         <div className="visual-product-codes"><span><b>{visualImages.length} variações disponíveis</b> • Identificação abaixo de cada opção</span></div>
                       ) : (
-                        <div className="visual-product-codes">
-                          <span><b>SKU</b> {product.sku?.trim() || "Não cadastrado"}</span>
-                          <span><b>Código de barras</b> {product.barcode?.trim() || "Não cadastrado"}</span>
-                        </div>
+                        (product.commercial_visibility?.sku !== false && product.sku?.trim()) || (product.commercial_visibility?.barcode !== false && product.barcode?.trim()) ? (
+                          <div className="visual-product-codes">
+                            {product.commercial_visibility?.sku !== false && product.sku?.trim() && <span><b>SKU</b> {product.sku.trim()}</span>}
+                            {product.commercial_visibility?.barcode !== false && product.barcode?.trim() && <span><b>Código de barras</b> {product.barcode.trim()}</span>}
+                          </div>
+                        ) : null
                       )}
                     </div>
                     {imagePages.length > 1 && <small>Página {imagePageIndex + 1}/{imagePages.length}</small>}
@@ -1490,8 +1622,18 @@ export default function CatalogPreviewPage() {
                   )}
                   {hasVariants && sharedImages.length > 0 && (
                     <div className="visual-shared-block">
-                      <div className="visual-shared-heading"><b>APRESENTAÇÃO DO PRODUTO</b><span>Fotos gerais • variações identificadas abaixo</span></div>
-                      <div className="visual-shared-gallery">
+                      <div className="visual-shared-heading">
+                        <b>FOTO PRINCIPAL E DETALHES</b>
+                        <span>
+                          Produto, embalagem e complementos quando cadastrados
+                          {product.package_quantity != null && product.package_quantity > 0 && (
+                            <small className="visual-package-note">
+                              {` • Conteúdo por embalagem: ${product.package_quantity} ${product.package_unit || "unidades"}`}
+                            </small>
+                          )}
+                        </span>
+                      </div>
+                      <div className={`visual-shared-gallery count-${sharedImages.length}`}>
                         {sharedImages.map((entry) => (
                           <figure key={entry.image.id}>
                             <img
@@ -1501,62 +1643,85 @@ export default function CatalogPreviewPage() {
                               alt={`${product.name} - ${entry.label} (foto geral)`}
                               loading="eager" decoding="async"
                             />
-                            <figcaption>{entry.label}</figcaption>
+                            <figcaption>{isPackagingImage(entry.image) ? "Embalagem" : entry.label}</figcaption>
                           </figure>
                         ))}
                       </div>
                     </div>
                   )}
-                  {product.package_quantity != null && product.package_quantity > 0 && (
-                    <div className="visual-package-info">Embalagem cadastrada: <b>{product.package_quantity} {product.package_unit || "unidades"}</b></div>
-                  )}
                   {hasVariants && <div className="visual-options-heading">VARIAÇÕES DISPONÍVEIS <span>{imagePageIndex * 6 + 1}–{Math.min((imagePageIndex + 1) * 6, visualImages.length)} de {visualImages.length}</span></div>}
 
-                  {pageImages.length > 0 ? (
-                    <div className={`visual-photo-grid count-${pageImages.length} ${pageImages.every((item) => !item.image) ? "text-only-grid" : ""}`}>
-                      {pageImages.map((item, photoIndex) => (
-                        <figure className={`visual-photo-card ${!item.image ? "without-photo" : ""} ${imagePageIndex === 0 && photoIndex === 0 ? "featured" : ""}`} key={item.key}>
+                  {pagePhotoEntries.length > 0 && (
+                    <div className={`visual-photo-grid count-${pagePhotoEntries.length}`}>
+                      {pagePhotoEntries.map((item, photoIndex) => (
+                        <figure className={`visual-photo-card ${imagePageIndex === 0 && photoIndex === 0 ? "featured" : ""}`} key={item.key}>
                           <div className={`visual-photo-frame ${item.secondary ? "with-pair" : ""}`}>
-                            {item.image ? (
                             <img
-                              src={getOptimizedCatalogImageUrl(item.image.image_url, pageImages.length <= 2 ? 1400 : 1000, 72)}
+                              src={getOptimizedCatalogImageUrl(item.image!.image_url, pagePhotoEntries.length <= 2 ? 1400 : 1000, 72)}
                               crossOrigin="anonymous"
-                              data-pdf-max-side={pageImages.length <= 2 ? 1400 : 1000}
-                              data-original-src={item.image.image_url}
+                              data-pdf-max-side={pagePhotoEntries.length <= 2 ? 1400 : 1000}
+                              data-original-src={item.image!.image_url}
                               alt={`${product.name} - ${item.variantName || item.label}`}
                               loading="eager"
                               decoding="async"
                             />
-                             ) : <div className="visual-no-photo">{sharedImages.length ? "Consulte a apresentação geral acima" : "Foto específica indisponível"}</div>}
                             {item.secondary && (
                               <img
                                 src={getOptimizedCatalogImageUrl(item.secondary.image_url, 1000, 72)}
                                 crossOrigin="anonymous" data-pdf-max-side="1000"
                                 data-original-src={item.secondary.image_url}
-                                alt={`${product.name} - ${item.variantName || item.label} - apresentação complementar`}
+                                alt={`${product.name} - ${item.variantName || item.label} - ${isPackagingImage(item.secondary) ? "embalagem" : "apresentação complementar"}`}
                                 loading="eager" decoding="async"
                               />
                             )}
                           </div>
                           <figcaption>
-                            <strong>{item.variantName || item.label}</strong>
-                            {item.label !== item.variantName && <span>{item.label}</span>}
-                            <small><b>SKU{item.variant ? " da variação" : ""}:</b> {(item.variant ? item.variant.sku : product.sku)?.trim() || "Não cadastrado"}</small>
-                            <small><b>Cód. barras:</b> {(item.variant ? item.variant.barcode : product.barcode)?.trim() || "Não cadastrado"}</small>
+                            <strong>{getVisualOptionTitle(item.variantName, item.label)}</strong>
+                            {getVisualOptionSubtitle(item.variantName, item.label) && <span>{getVisualOptionSubtitle(item.variantName, item.label)}</span>}
+                            {product.commercial_visibility?.sku !== false && (item.variant ? item.variant.sku : product.sku)?.trim() && (
+                              <small><b>SKU{item.variant ? " da variação" : ""}:</b> {(item.variant ? item.variant.sku : product.sku)?.trim()}</small>
+                            )}
+                            {product.commercial_visibility?.barcode !== false && (item.variant ? item.variant.barcode : product.barcode)?.trim() && (
+                              <small><b>Cód. barras:</b> {(item.variant ? item.variant.barcode : product.barcode)?.trim()}</small>
+                            )}
                           </figcaption>
                         </figure>
                       ))}
                     </div>
-                  ) : (
+                  )}
+
+                  {pageTextEntries.length > 0 && (
+                    <div className="visual-missing-variants">
+                      <div className="visual-missing-variants-title">OUTRAS OPÇÕES</div>
+                      <div className="visual-missing-variants-list">
+                        {pageTextEntries.map((item) => (
+                          <div className="visual-missing-variant" key={item.key}>
+                            <strong>{getVisualOptionTitle(item.variantName, item.label)}</strong>
+                            {getVisualOptionSubtitle(item.variantName, item.label) && <span>{getVisualOptionSubtitle(item.variantName, item.label)}</span>}
+                            <small>{sharedImages.length ? "Consulte as fotos de apresentação acima" : "Foto individual não cadastrada"}</small>
+                            {product.commercial_visibility?.sku !== false && item.variant?.sku?.trim() && (
+                              <small><b>SKU:</b> {item.variant.sku.trim()}</small>
+                            )}
+                            {product.commercial_visibility?.barcode !== false && item.variant?.barcode?.trim() && (
+                              <small><b>Cód. barras:</b> {item.variant.barcode.trim()}</small>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {pageImages.length === 1 && pageImages[0].length === 0 && (
                     <div className="visual-empty">Imagens profissionais em preparação.</div>
                   )}
 
                   <footer className="visual-product-footer">
                     <span>Catálogo visual • Sem preços</span>
-                    <span>{product.name}</span>
+                    <span>{product.name.replace(/[.!?;:,]+$/u, "")}</span>
                   </footer>
                 </section>
-              ));
+                );
+              });
             })}
           </>
         ) : (
@@ -4031,23 +4196,34 @@ export default function CatalogPreviewPage() {
         .visual-shared-block { flex:0 0 auto; margin-bottom:3mm; }
         .visual-shared-heading { display:flex; justify-content:space-between; gap:3mm; color:#8a2a18; font-size:2.3mm; margin-bottom:2mm; }
         .visual-shared-heading span { color:#84756d; }
-        .visual-shared-gallery { display:flex; height:55mm; gap:3mm; }
-        .visual-shared-gallery figure { flex:1; min-width:0; margin:0; display:flex; flex-direction:column; border:0.3mm solid #eee2d9; border-radius:3mm; padding:2mm; }
-        .visual-shared-gallery img { width:100%; height:0; flex:1; min-height:0; object-fit:contain; }
+        .visual-shared-gallery { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); height:65mm; gap:3mm; }
+        .visual-shared-gallery.count-1 { grid-template-columns:1fr; }
+        .visual-shared-gallery.count-2 { grid-template-columns:1.35fr 1fr; }
+        .visual-shared-gallery.count-3 { grid-template-columns:1.5fr 1fr 1fr; }
+        .visual-shared-gallery.count-4 { grid-template-columns:1.7fr repeat(3,minmax(0,1fr)); }
+        .visual-shared-gallery figure { min-width:0; min-height:0; margin:0; display:grid; grid-template-rows:minmax(0,1fr) auto; overflow:hidden; border:0.3mm solid #eee2d9; border-radius:3mm; padding:2mm; }
+        .visual-shared-gallery img { display:block; width:100%; height:100%; max-height:100%; min-height:0; object-fit:contain; }
         .visual-shared-gallery figcaption { text-align:center; color:#8b7568; font-size:2.2mm; padding-top:1mm; }
+        .visual-package-note { color:#74543e; font-size:2.2mm; font-weight:700; }
         .visual-text-options .visual-shared-gallery { height:95mm; }
         .visual-photo-grid.text-only-grid { flex:0 0 auto; grid-template-rows:none; grid-auto-rows:auto; }
         .visual-text-options .visual-product-footer { margin-top:auto; }
-        .visual-package-info { font-size:2.7mm; color:#74543e; padding:2mm 0 3mm; }
         .visual-photo-frame.with-pair { grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:2mm; }
         .visual-photo-frame.with-pair img { min-width:0; }
         .visual-photo-card.without-photo .visual-photo-frame { flex:0 0 auto; }
         .visual-photo-card.without-photo .visual-no-photo { padding:1mm; font-size:2.2mm; }
+        .visual-missing-variants { flex:0 0 auto; margin-top:3mm; }
+        .visual-missing-variants-title { margin-bottom:1.5mm; color:#8a6a58; font-size:2.2mm; font-weight:800; letter-spacing:.35mm; }
+        .visual-missing-variants-list { display:flex; flex-wrap:wrap; gap:2mm; }
+        .visual-missing-variant { flex:1 1 48mm; min-width:42mm; padding:2mm 3mm; border:1px solid #eadfd7; border-radius:2mm; background:#fffaf6; display:flex; flex-direction:column; gap:.7mm; }
+        .visual-missing-variant strong { color:#4a3730; font-size:2.8mm; }
+        .visual-missing-variant span, .visual-missing-variant small { color:#76675f; font-size:2.2mm; line-height:1.2; overflow-wrap:anywhere; }
+        .visual-missing-variant small b { color:#8a2a18; }
         .visual-options-heading { margin:0 0 4mm; padding:3mm 0; border-top:0.3mm solid #e8ded7; color:#b94b0d; font-weight:800; font-size:2.8mm; letter-spacing:0.4mm; display:flex; justify-content:space-between; }
         .visual-options-heading span { color:#796a60; letter-spacing:0; font-weight:500; }
         .visual-no-photo { color:#9b8c84; font-size:3mm; text-align:center; padding:5mm; }
         .visual-variants-page .visual-photo-card { border-radius:3mm; border-color:#eadbd0; }
-        .visual-variants-page .visual-photo-card figcaption { background:#fff9f3; border-top:0.6mm solid #ed8a32; }
+        .visual-variants-page .visual-photo-card figcaption { min-height:19mm; background:#fff9f3; border-top:0.6mm solid #ed8a32; }
         .visual-variants-page .visual-photo-card figcaption strong { font-size:3.8mm; color:#543528; }
         .visual-description { margin:0 0 4mm; color:#53453d; font-size:2.8mm; line-height:1.4; overflow-wrap:anywhere; }
         .visual-description > b { color:#8a2a18; font-size:2.4mm; text-transform:uppercase; }
@@ -4061,7 +4237,7 @@ export default function CatalogPreviewPage() {
         .visual-photo-card { min-height:0; margin:0; border:1px solid #e8ded7; border-radius:4mm; background:#fff; overflow:hidden; display:flex; flex-direction:column; }
         .visual-photo-frame { flex:1; min-height:0; display:grid; place-items:center; padding:3mm; background:#fff; }
         .visual-photo-frame img { width:100%; height:100%; min-height:0; object-fit:contain; }
-        .visual-photo-card figcaption { min-height:19mm; padding:2mm 3mm; border-top:1px solid #eee5df; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:0.7mm; }
+        .visual-photo-card figcaption { min-height:12mm; padding:2mm 3mm; border-top:1px solid #eee5df; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:0.7mm; }
         .visual-photo-card figcaption strong { color:#4a3730; font-size:2.7mm; line-height:1.15; }
         .visual-photo-card figcaption span { color:#9a8b83; font-size:2.2mm; }
         .visual-empty { flex:1; display:grid; place-items:center; border:1px dashed #dccfc6; border-radius:5mm; color:#9a8b83; font-size:3mm; }
