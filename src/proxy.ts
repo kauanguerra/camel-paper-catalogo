@@ -13,6 +13,7 @@ const PUBLIC_PREFIXES = [
   "/login",
   "/catalogo-cliente",
   "/api/catalogo-cliente",
+  "/catalogo-publico",
 ];
 
 function isPublicPath(pathname: string) {
