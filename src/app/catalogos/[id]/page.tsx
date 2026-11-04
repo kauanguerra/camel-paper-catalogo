@@ -1711,7 +1711,7 @@ export default function CatalogPreviewPage() {
                     </div>
                   )}
 
-                  {pageImages.length === 1 && pageImages[0].length === 0 && (
+                  {pageImages.length === 0 && (
                     <div className="visual-empty">Imagens profissionais em preparação.</div>
                   )}
 

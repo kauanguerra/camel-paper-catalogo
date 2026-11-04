@@ -69,6 +69,18 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
 
+  // As fotos do vendedor são servidas diretamente pelo Storage, não pela API.
+  const isPublicCatalogImage =
+    url.protocol === "https:" &&
+    url.hostname === "maltmqrwwxifqudbzxjn.supabase.co" &&
+    (url.pathname.startsWith("/storage/v1/render/image/public/product-images/") ||
+      url.pathname.startsWith("/storage/v1/object/public/product-images/"));
+
+  if (isPublicCatalogImage) {
+    event.respondWith(catalogImage(request));
+    return;
+  }
+
   if (url.origin !== self.location.origin) return;
 
   if (url.pathname === "/api/catalog-image") {
@@ -90,6 +102,46 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 });
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "CAMEL_OFFLINE_STATUS") {
+    event.ports[0]?.postMessage({ version: 2 });
+  }
+});
+
+async function catalogImage(request) {
+  const cache = await caches.open(IMAGE_CACHE);
+  // Supabase varia por Accept; a cópia validada continua utilizável por <img>.
+  const cached = await cache.match(request, { ignoreVary: true });
+  if (cached?.ok && cached.headers.get("content-type")?.startsWith("image/")) {
+    return cached;
+  }
+  const full = new URL(request.url);
+  if (
+    full.pathname.startsWith("/storage/v1/render/image/public/product-images/") &&
+    [220, 420, 520, 1200].includes(Number(full.searchParams.get("width")))
+  ) {
+    full.searchParams.set("width", "1200");
+    full.searchParams.set("quality", "82");
+    const saved = await cache.match(full.toString(), { ignoreVary: true });
+    if (saved?.ok && saved.headers.get("content-type")?.startsWith("image/")) {
+      return saved;
+    }
+  }
+  try {
+    const response = await fetch(request.url, {
+      mode: "cors",
+      credentials: "omit",
+    });
+    if (response.ok && response.headers.get("content-type")?.startsWith("image/")) {
+      // Falta de espaço local não pode impedir uma foto online de aparecer.
+      try { await cache.put(request.url, response.clone()); } catch {}
+    }
+    return response;
+  } catch {
+    return new Response("", { status: 504, statusText: "Offline" });
+  }
+}
 
 async function cacheFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
@@ -175,3 +227,4 @@ async function networkFirstPage(request) {
     );
   }
 }
+

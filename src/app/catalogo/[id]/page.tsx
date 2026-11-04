@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { getOptimizedCatalogImageUrl } from "@/lib/catalog-image-policy";
 import SellerCart from "@/components/SellerCart";
 import SellerCatalogLoading from "@/components/SellerCatalogLoading";
 import { useSellerCart } from "@/hooks/useSellerCart";
@@ -80,13 +81,7 @@ function getOptimizedImageUrl(
   width = 900,
   quality = 78
 ) {
-  const params = new URLSearchParams({
-    src: sourceUrl,
-    w: String(width),
-    q: String(quality),
-  });
-
-  return `/api/catalog-image?${params.toString()}`;
+  return getOptimizedCatalogImageUrl(sourceUrl, width, quality);
 }
 
 
@@ -2159,3 +2154,4 @@ export default function CatalogoProdutoPage() {
     </main>
   );
 }
+

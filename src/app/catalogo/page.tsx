@@ -11,6 +11,7 @@ import {
   resolveCatalogPresentationImage,
   resolveCatalogVariantImage,
 } from "@/lib/catalog-image-policy";
+import { hasOfflineImages, prepareOfflineImages } from "@/lib/catalog-offline";
 import AppSidebar from "@/components/AppSidebar";
 import SellerCart from "@/components/SellerCart";
 import { useSellerCart } from "@/hooks/useSellerCart";
@@ -80,7 +81,6 @@ const OFFLINE_DB_NAME = "camel-paper-offline";
 const OFFLINE_DB_VERSION = 1;
 const OFFLINE_STORE = "catalog";
 const OFFLINE_RECORD_KEY = "commercial-catalog";
-const OFFLINE_CACHE_NAME = "camel-paper-catalog-images-v1";
 
 type OfflineCatalogRecord = {
   key: string;
@@ -89,6 +89,8 @@ type OfflineCatalogRecord = {
   catalogImages: ProductImage[];
   productVariants: ProductVariant[];
   updatedAt: string;
+  imageManifest?: string[];
+  offlineVersion?: number;
 };
 
 function openOfflineDb(): Promise<IDBDatabase> {
@@ -181,7 +183,9 @@ export default function CatalogoPage() {
         const offline = await readOfflineCatalog();
         if (!mounted || !offline) return;
 
-        setOfflineReady(true);
+        const verified = offline.offlineVersion === 2 && await hasOfflineImages(offline.imageManifest);
+        if (!mounted) return;
+        setOfflineReady(verified);
         setOfflineUpdatedAt(offline.updatedAt);
       } catch (error) {
         console.error("Erro ao verificar catálogo offline:", error);
@@ -206,9 +210,13 @@ export default function CatalogoPage() {
         setCategories(offline.categories);
         setCatalogImages(offline.catalogImages);
         setProductVariants(offline.productVariants || []);
-        setOfflineReady(true);
+        const verified = offline.offlineVersion === 2 && await hasOfflineImages(offline.imageManifest);
+        if (!mounted) return;
+        setOfflineReady(verified);
         setOfflineUpdatedAt(offline.updatedAt);
-        setOfflineMessage("Exibindo a versão salva neste dispositivo.");
+        setOfflineMessage(verified
+          ? "Exibindo a versão salva neste dispositivo."
+          : "Os dados estão salvos, mas as fotos offline precisam ser atualizadas com internet.");
         setLoading(false);
       } catch (error) {
         console.error("Erro ao carregar catálogo offline:", error);
@@ -456,46 +464,15 @@ export default function CatalogoPage() {
     setOfflineMessage("Preparando produtos e fotos para uso offline...");
 
     try {
-      const cache = await caches.open(OFFLINE_CACHE_NAME);
-
-      const imageUrls = Array.from(
-        new Set(
-          catalogImages.flatMap((image) => [
-            getOptimizedCatalogImageUrl(image.image_url, 420, 72),
-            getOptimizedCatalogImageUrl(image.image_url, 520, 74),
-            getOptimizedCatalogImageUrl(image.image_url, 220, 70),
-            getOptimizedCatalogImageUrl(image.image_url, 1200, 82),
-          ])
-        )
+      const activeIds = new Set(products.map((product) => product.id));
+      const imagesToSave = catalogImages.filter((image) => activeIds.has(image.product_id));
+      const result = await prepareOfflineImages(
+        imagesToSave.map((image) => image.image_url),
+        (saved, total, failed) => {
+          setOfflineProgress(total === 0 ? 0 : Math.min(99, Math.round(saved / total * 100)));
+          setOfflineMessage(`${saved} de ${total} fotos salvas e verificadas${failed ? ` • ${failed} falha(s)` : ""}. Mantenha esta página aberta.`);
+        }
       );
-
-      let completed = 0;
-      const concurrency = 4;
-
-      for (let index = 0; index < imageUrls.length; index += concurrency) {
-        const batch = imageUrls.slice(index, index + concurrency);
-
-        await Promise.all(
-          batch.map(async (url) => {
-            try {
-              const response = await fetch(url, { cache: "reload" });
-
-              if (response.ok) {
-                await cache.put(url, response.clone());
-              }
-            } catch (error) {
-              console.warn("Não foi possível armazenar uma imagem offline:", url, error);
-            } finally {
-              completed += 1;
-              setOfflineProgress(
-                imageUrls.length === 0
-                  ? 100
-                  : Math.round((completed / imageUrls.length) * 100)
-              );
-            }
-          })
-        );
-      }
 
       const updatedAt = new Date().toISOString();
 
@@ -503,22 +480,25 @@ export default function CatalogoPage() {
         key: OFFLINE_RECORD_KEY,
         products,
         categories,
-        catalogImages,
+        catalogImages: imagesToSave,
         productVariants,
         updatedAt,
+        imageManifest: result.manifest,
+        offlineVersion: 2,
       });
 
       setOfflineReady(true);
       setOfflineUpdatedAt(updatedAt);
       setOfflineProgress(100);
       setOfflineMessage(
-        imageUrls.length > 0
-          ? `${imageUrls.length} foto(s), ${products.length} produto(s) e ${productVariants.length} variação(ões) foram salvos neste dispositivo.`
+        result.count > 0
+          ? `${result.count} foto(s) verificadas, ${products.length} produto(s) e ${productVariants.length} variação(ões) foram salvos neste dispositivo.`
           : `${products.length} produto(s) e ${productVariants.length} variação(ões) foram salvos neste dispositivo.`
       );
     } catch (error) {
       console.error("Erro ao preparar catálogo offline:", error);
-      setOfflineMessage("Não foi possível concluir a preparação offline.");
+      setOfflineReady(false);
+      setOfflineMessage(error instanceof Error ? error.message : "Não foi possível concluir a preparação offline.");
     } finally {
       setOfflinePreparing(false);
     }
@@ -1963,3 +1943,4 @@ export default function CatalogoPage() {
     </main>
   );
 }
+

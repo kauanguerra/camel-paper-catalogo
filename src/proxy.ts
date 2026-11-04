@@ -92,6 +92,14 @@ function forbiddenResponse(request: NextRequest, role: Role) {
 }
 
 export async function proxy(request: NextRequest) {
+  // Infraestrutura da PWA: precisa funcionar antes do login e para vendedores.
+  if (
+    request.nextUrl.pathname === "/sw.js" ||
+    request.nextUrl.pathname === "/manifest.webmanifest"
+  ) {
+    return NextResponse.next();
+  }
+
   let response = NextResponse.next({
     request,
   });
@@ -198,3 +206,4 @@ export const config = {
     "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };
+
