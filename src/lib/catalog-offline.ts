@@ -18,6 +18,9 @@ function isImage(response?: Response) {
 
 export async function hasOfflineImages(urls?: string[]) {
   if (!urls || !("caches" in window)) return false;
+  const appCache = await caches.open("camel-paper-pwa-v1-app");
+  const shell = await appCache.match("/catalogo", { ignoreVary: true });
+  if (shell?.headers.get("X-Camel-Offline-Shell") !== "3") return false;
   const cache = await caches.open(OFFLINE_IMAGE_CACHE);
   for (const url of urls) {
     if (!isImage(await cache.match(url, { ignoreVary: true }))) return false;
@@ -44,7 +47,7 @@ export async function ensureOfflineWorker() {
             resolve(value);
           };
           const timer = setTimeout(() => finish(false), 1000);
-          channel.port1.onmessage = (event) => finish(event.data?.version === 2);
+          channel.port1.onmessage = (event) => finish(event.data?.version === 3);
           worker.postMessage({ type: "CAMEL_OFFLINE_STATUS" }, [channel.port2]);
         });
         if (ready) return;
@@ -106,6 +109,27 @@ export async function prepareOfflineImages(
   onProgress: (saved: number, total: number, failed: number) => void
 ) {
   await ensureOfflineWorker();
+  await new Promise<void>((resolve, reject) => {
+    const channel = new MessageChannel();
+    const timeout = setTimeout(() => {
+      channel.port1.close();
+      reject(new Error("Tempo limite ao salvar as telas offline. Tente novamente com internet."));
+    }, 90_000);
+    channel.port1.onmessage = (event) => {
+      clearTimeout(timeout);
+      channel.port1.close();
+      if (event.data?.ok) resolve();
+      else reject(new Error(event.data?.error || "Não foi possível salvar as telas offline."));
+    };
+    const worker = navigator.serviceWorker.controller;
+    if (!worker) {
+      clearTimeout(timeout);
+      channel.port1.close();
+      reject(new Error("Recarregue o catálogo para ativar a atualização offline."));
+      return;
+    }
+    worker.postMessage({ type: "CAMEL_PREPARE_SHELL" }, [channel.port2]);
+  });
   const cache = await caches.open(OFFLINE_IMAGE_CACHE);
   const unique = [...new Set(sources.filter(Boolean))];
   for (const source of unique) {
@@ -196,3 +220,4 @@ export async function prepareOfflineImages(
   }
   return { manifest, count: unique.length };
 }
+

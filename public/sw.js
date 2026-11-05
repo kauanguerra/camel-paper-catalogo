@@ -21,7 +21,7 @@ self.addEventListener("install", (event) => {
       await Promise.allSettled(
         APP_SHELL.map(async (url) => {
           const response = await fetch(url, { cache: "reload" });
-          if (response.ok) {
+          if (response.ok && !response.redirected) {
             await cache.put(url, response);
           }
         })
@@ -104,10 +104,69 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("message", (event) => {
+  if (event.data?.type === "CAMEL_PREPARE_SHELL") {
+    event.waitUntil(prepareCatalogShell().then(
+      () => event.ports[0]?.postMessage({ ok: true }),
+      (error) => event.ports[0]?.postMessage({ ok: false, error: error.message })
+    ));
+  }
   if (event.data?.type === "CAMEL_OFFLINE_STATUS") {
-    event.ports[0]?.postMessage({ version: 2 });
+    event.ports[0]?.postMessage({ version: 3 });
   }
 });
+
+async function fetchRequired(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(url, { cache: "reload", signal: controller.signal });
+    if (!response.ok || response.redirected) {
+      throw new Error("Não foi possível salvar as telas offline. Confira sua conexão e seu login.");
+    }
+    // Consome também o corpo dentro do tempo limite.
+    const body = await response.arrayBuffer();
+    const headers = new Headers(response.headers);
+    headers.delete("content-encoding");
+    headers.delete("content-length");
+    return new Response(body, { status: response.status, headers });
+  } finally { clearTimeout(timeout); }
+}
+
+async function prepareCatalogShell() {
+  const response = await fetchRequired("/catalogo");
+  if (!response.headers.get("content-type")?.includes("text/html")) {
+    throw new Error("O catálogo não retornou uma página válida.");
+  }
+  const html = await response.text();
+  const assets = new Set(["/brand/camel-paper-logo.png", "/brand/camel-colorido.svg"]);
+  for (const match of html.matchAll(/(?:src|href)=["']([^"']+)["']/g)) {
+    const url = new URL(match[1].replaceAll("&amp;", "&"), self.location.origin);
+    if (url.origin === self.location.origin && url.pathname.startsWith("/_next/static/")) {
+      assets.add(url.pathname + url.search);
+    }
+  }
+  if (assets.size <= 2) throw new Error("Os arquivos das telas offline não foram encontrados.");
+  const assetCache = await caches.open(ASSET_CACHE);
+  const queue = [...assets];
+  let index = 0;
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    while (index < queue.length) {
+      const url = queue[index++];
+      const asset = await fetchRequired(url);
+      if (asset.headers.get("content-type")?.includes("text/html")) {
+        throw new Error("Um arquivo do catálogo retornou uma página de login ou erro.");
+      }
+      await assetCache.put(url, asset);
+    }
+  }));
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  headers.delete("content-encoding");
+  headers.delete("vary");
+  headers.set("X-Camel-Offline-Shell", "3");
+  const appCache = await caches.open(APP_CACHE);
+  await appCache.put("/catalogo", new Response(html, { headers }));
+}
 
 async function catalogImage(request) {
   const cache = await caches.open(IMAGE_CACHE);
@@ -152,7 +211,7 @@ async function cacheFirst(request, cacheName) {
   try {
     const response = await fetch(request);
 
-    if (response.ok) {
+    if (response.ok && !response.redirected) {
       await cache.put(request, response.clone());
     }
 
@@ -199,21 +258,21 @@ async function networkFirstPage(request) {
   try {
     const response = await fetch(request);
 
-    if (response.ok) {
+    if (response.ok && !response.redirected) {
       await cache.put(request, response.clone());
     }
 
     return response;
   } catch {
+    const appCache = await caches.open(APP_CACHE);
+    const pathname = new URL(request.url).pathname;
+    if (pathname === "/catalogo" || pathname.startsWith("/catalogo/")) {
+      const shell = await appCache.match("/catalogo", { ignoreVary: true });
+      if (shell?.headers.get("X-Camel-Offline-Shell") === "3") return shell;
+      return new Response("<!doctype html><html lang='pt-BR'><meta charset='utf-8'><title>Atualizar catálogo offline</title><body><h1>Atualize o conteúdo offline</h1><p>Conecte-se à internet, abra o catálogo e clique em Atualizar conteúdo offline para salvar as telas de produtos e checkout.</p></body></html>", { status: 503, headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
     const exact = await cache.match(request);
     if (exact) return exact;
-
-    const appCache = await caches.open(APP_CACHE);
-
-    if (request.url.includes("/catalogo/")) {
-      const catalogFallback = await appCache.match("/catalogo");
-      if (catalogFallback) return catalogFallback;
-    }
 
     const rootFallback = await appCache.match("/");
     if (rootFallback) return rootFallback;
@@ -227,4 +286,5 @@ async function networkFirstPage(request) {
     );
   }
 }
+
 

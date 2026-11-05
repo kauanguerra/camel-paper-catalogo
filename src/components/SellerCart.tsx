@@ -1,5 +1,6 @@
 "use client";
 
+import { getOptimizedCatalogImageUrl } from "@/lib/catalog-image-policy";
 import { useSellerCart } from "@/hooks/useSellerCart";
 
 type SellerCartProps = {
@@ -16,15 +17,10 @@ function money(value: number) {
   }).format(Number(value || 0));
 }
 
-function optimizedImage(sourceUrl: string, width = 180, quality = 70) {
-  const params = new URLSearchParams({
-    src: sourceUrl,
-    w: String(width),
-    q: String(quality),
-  });
-
-  return `/api/catalog-image?${params.toString()}`;
+function optimizedImage(sourceUrl: string) {
+  return getOptimizedCatalogImageUrl(sourceUrl, 220, 70);
 }
+
 
 export default function SellerCart({
   open,
@@ -572,3 +568,4 @@ export default function SellerCart({
     </>
   );
 }
+

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useSellerCart } from "@/hooks/useSellerCart";
@@ -50,6 +50,17 @@ export default function SellerCheckout({
   onClose,
 }: SellerCheckoutProps) {
   const router = useRouter();
+  const [online, setOnline] = useState(true);
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
   const { cart, cartUnits, cartTotal, clearCart } = useSellerCart();
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -203,6 +214,9 @@ export default function SellerCheckout({
           </button>
         </header>
 
+        {!online && <p role="status" style={{ padding: "12px 20px", margin: 0, background: "#fff1da", color: "#713516" }}>
+          Você está offline. Pode revisar o pedido nesta tela. Para registrar na Central de Pedidos, reconecte-se e confirme. Não há envio automático.
+        </p>}
         <div className="checkout-content">
           <div className="checkout-form-column">
             <section className="checkout-card">
@@ -1161,3 +1175,4 @@ export default function SellerCheckout({
     </div>
   );
 }
+

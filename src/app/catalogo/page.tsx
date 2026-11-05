@@ -3,7 +3,6 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
   getOptimizedCatalogImageUrl,
@@ -13,6 +12,9 @@ import {
 } from "@/lib/catalog-image-policy";
 import { hasOfflineImages, prepareOfflineImages } from "@/lib/catalog-offline";
 import AppSidebar from "@/components/AppSidebar";
+import SellerProductDetails from "@/components/SellerProductDetails";
+import SellerCheckout from "@/components/SellerCheckout";
+import { readSellerView, sellerViewUrl } from "@/lib/seller-navigation";
 import SellerCart from "@/components/SellerCart";
 import { useSellerCart } from "@/hooks/useSellerCart";
 
@@ -149,7 +151,31 @@ function formatOfflineDate(value: string | null) {
 }
 
 export default function CatalogoPage() {
-  const router = useRouter();
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+
+  useEffect(() => {
+    const restore = () => {
+      const view = readSellerView(window.location.href);
+      setDetailId(view.productId);
+      setCheckoutOpen(view.checkout);
+    };
+    restore();
+    window.addEventListener("popstate", restore);
+    window.addEventListener("hashchange", restore);
+    return () => {
+      window.removeEventListener("popstate", restore);
+      window.removeEventListener("hashchange", restore);
+    };
+  }, []);
+
+  function navigateSeller(productId: string | null, checkout = false) {
+    window.history.pushState(null, "", sellerViewUrl(productId, checkout));
+    setDetailId(productId);
+    setCheckoutOpen(checkout);
+    setCartOpen(false);
+    if (!checkout) window.scrollTo(0, 0);
+  }
 
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -505,7 +531,14 @@ export default function CatalogoPage() {
   }
 
   return (
-    <main className="shell">
+    <>
+    {detailId && <SellerProductDetails
+      key={detailId}
+      productId={detailId}
+      onBack={() => navigateSeller(null)}
+      onCheckout={() => navigateSeller(detailId, true)}
+    />}
+    <main className="shell" style={{ display: detailId ? "none" : undefined }}>
       <AppSidebar />
       <div className="catalog-shell">
       <section className="hero">
@@ -514,6 +547,7 @@ export default function CatalogoPage() {
             <div className="brand">
               <div className="brand-logo">
                 <Image
+                  unoptimized
                   src="/brand/camel-paper-logo.png"
                   alt="Camel Paper"
                   width={250}
@@ -654,11 +688,11 @@ export default function CatalogoPage() {
                   key={product.id}
                   role="link"
                   tabIndex={0}
-                  onClick={() => router.push(`/catalogo/${product.id}`)}
+                  onClick={() => navigateSeller(product.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      router.push(`/catalogo/${product.id}`);
+                      navigateSeller(product.id);
                     }
                   }}
                 >
@@ -789,7 +823,7 @@ export default function CatalogoPage() {
                       className="view-product-button"
                       onClick={(event) => {
                         event.stopPropagation();
-                        router.push(`/catalogo/${product.id}`);
+                        navigateSeller(product.id);
                       }}
                     >
                       Ver ficha completa <span>→</span>
@@ -813,7 +847,7 @@ export default function CatalogoPage() {
       <SellerCart
         open={cartOpen}
         onOpenChange={setCartOpen}
-        onCheckout={() => router.push("/catalogo/checkout")}
+        onCheckout={() => navigateSeller(detailId, true)}
       />
 
       <style jsx>{`
@@ -1941,6 +1975,9 @@ export default function CatalogoPage() {
         }
       `}</style>
     </main>
+    <SellerCheckout open={checkoutOpen} onClose={() => navigateSeller(detailId)} />
+    </>
   );
 }
+
 
