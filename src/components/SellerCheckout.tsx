@@ -576,7 +576,9 @@ export default function SellerCheckout({
           </div>
         )}
 
-        <style jsx>{`
+      </section>
+
+      <style jsx>{`
           .checkout-backdrop {
             position: fixed;
             inset: 0;
@@ -1170,9 +1172,9 @@ export default function SellerCheckout({
               grid-column: auto;
             }
           }
-        `}</style>
-      </section>
+      `}</style>
     </div>
   );
 }
+
 
