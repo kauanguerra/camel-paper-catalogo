@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import ProductRegistrationAssistant from "@/components/ProductRegistrationAssistant";
 import AppSidebar from "@/components/AppSidebar";
 import { ArrowLeft } from "lucide-react";
 
@@ -60,6 +61,7 @@ export default function NovoProdutoPage() {
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [catalogGroups, setCatalogGroups] = useState<CatalogGroup[]>([]);
+  const [aiBusy, setAiBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [hasVariants, setHasVariants] = useState(false);
@@ -434,6 +436,7 @@ export default function NovoProdutoPage() {
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (loading || aiBusy) return;
 
     if (!["camel-paper", "acrilex"].includes(form.brand)) {
       alert("Selecione uma marca válida.");
@@ -623,39 +626,6 @@ export default function NovoProdutoPage() {
                 </select>
               </Field>
 
-              <Field label="Categoria">
-                <select
-                  name="category_id"
-                  value={form.category_id}
-                  onChange={handleChange}
-                >
-                  <option value="">Selecione...</option>
-                  {categories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              <Field label="Grupo no catálogo">
-                <select
-                  name="catalog_group_id"
-                  value={form.catalog_group_id}
-                  onChange={handleChange}
-                >
-                  <option value="">Sem grupo comercial</option>
-                  {catalogGroups.map((group) => (
-                    <option key={group.id} value={group.id}>
-                      {group.name}
-                    </option>
-                  ))}
-                </select>
-                <small className="field-helper">
-                  Sugerido automaticamente pelo nome e categoria. Você pode alterar manualmente.
-                </small>
-              </Field>
-
               <Field label="Código interno">
                 <input
                   name="internal_code"
@@ -684,14 +654,7 @@ export default function NovoProdutoPage() {
                 />
               </Field>
 
-              <Field label="Material">
-                <input
-                  name="material"
-                  value={form.material}
-                  onChange={handleChange}
-                  placeholder="Ex.: Papel 75 GSM"
-                />
-              </Field>
+
             </div>
           </section>
 
@@ -817,6 +780,88 @@ export default function NovoProdutoPage() {
           <section className="form-section">
             <div className="section-heading">
               <div>
+                <h2>Descrição e especificações</h2>
+                <p>Texto e especificações exibidos na ficha do produto.</p>
+              </div>
+            </div>
+
+            <ProductRegistrationAssistant
+              name={form.name} brand={form.brand} photos={photos} values={form}
+              categories={categories} groups={catalogGroups} disabled={loading}
+              onBusyChange={setAiBusy}
+              onApply={(patch) => setForm(current => ({ ...current, ...patch }))}
+            />
+            <div className="form-grid">
+              <Field label="Categoria">
+                <select
+                  name="category_id"
+                  value={form.category_id}
+                  onChange={handleChange}
+                >
+                  <option value="">Selecione...</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Grupo no catálogo">
+                <select
+                  name="catalog_group_id"
+                  value={form.catalog_group_id}
+                  onChange={handleChange}
+                >
+                  <option value="">Sem grupo comercial</option>
+                  {catalogGroups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
+                <small className="field-helper">
+                  Sugerido automaticamente pelo nome e categoria. Você pode alterar manualmente.
+                </small>
+              </Field>
+
+              <Field label="Material">
+                <input
+                  name="material"
+                  value={form.material}
+                  onChange={handleChange}
+                  placeholder="Ex.: Papel 75 GSM"
+                />
+              </Field>
+            </div>
+
+            <Field label="Descrição">
+              <textarea
+                name="description"
+                value={form.description}
+                onChange={handleChange}
+                rows={6}
+                placeholder="Descrição completa do produto..."
+              />
+            </Field>
+
+            <Field label="Especificações / informações adicionais">
+              <textarea
+                name="specifications"
+                value={form.specifications}
+                onChange={handleChange}
+                rows={4}
+                placeholder="Ex.: 75 GSM, 4 divisórias, cores sortidas..."
+              />
+            </Field>
+          </section>
+
+          <details className="erp-details">
+            <summary>Dados comerciais e logísticos <small>Medidas, embalagem, preços e caixa master</small></summary>
+            <p className="erp-note">Integração com o WinThor ainda não conectada. Por enquanto, os campos abaixo podem ser preenchidos manualmente. A IA não altera estes valores.</p>
+          <section className="form-section">
+            <div className="section-heading">
+              <div>
                 <h2>Medidas e embalagem</h2>
                 <p>Esses campos poderão ser alterados posteriormente.</p>
               </div>
@@ -937,41 +982,16 @@ export default function NovoProdutoPage() {
             </div>
           </section>
 
-          <section className="form-section">
-            <div className="section-heading">
-              <div>
-                <h2>Descrição do catálogo</h2>
-                <p>Texto e especificações exibidos na ficha do produto.</p>
-              </div>
-            </div>
 
-            <Field label="Descrição">
-              <textarea
-                name="description"
-                value={form.description}
-                onChange={handleChange}
-                rows={6}
-                placeholder="Descrição completa do produto..."
-              />
-            </Field>
 
-            <Field label="Especificações / informações adicionais">
-              <textarea
-                name="specifications"
-                value={form.specifications}
-                onChange={handleChange}
-                rows={4}
-                placeholder="Ex.: 75 GSM, 4 divisórias, cores sortidas..."
-              />
-            </Field>
-          </section>
+          </details>
 
           <div className="form-actions">
             <button
               type="button"
               className="secondary-button"
               onClick={() => router.back()}
-              disabled={loading}
+              disabled={loading || aiBusy}
             >
               Cancelar
             </button>
@@ -979,7 +999,7 @@ export default function NovoProdutoPage() {
             <button
               type="submit"
               className="primary-button"
-              disabled={loading}
+              disabled={loading || aiBusy}
             >
               {loading ? "Salvando produto..." : "Cadastrar produto"}
             </button>
@@ -990,6 +1010,11 @@ export default function NovoProdutoPage() {
       </section>
 
       <style jsx>{`
+        .erp-details {border:1px solid #e5d8cf;border-radius:18px;background:white;padding:20px;}
+        .erp-details summary {cursor:pointer;font-weight:800;color:#8a2a18;}
+        .erp-details summary small {display:block;font-weight:400;color:#746b66;margin-top:6px;}
+        .erp-note {font-size:14px;line-height:1.6;color:#746b66;}
+        .erp-details .form-section {margin-top:16px;}
         .page-shell {
           min-height: 100vh;
           background: #f8f6f3;
