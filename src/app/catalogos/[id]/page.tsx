@@ -1,5 +1,6 @@
 "use client";
 
+import AcrilexLogo from "@/components/AcrilexLogo";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -15,6 +16,7 @@ import {
 import { ArrowLeft, Copy, Link2Off } from "lucide-react";
 
 type Catalog = {
+  brand: string;
   id: string;
   name: string;
   description: string | null;
@@ -32,6 +34,7 @@ type Catalog = {
 };
 
 type Product = {
+  brand: string;
   id: string;
   name: string;
   category_id: string | null;
@@ -149,6 +152,8 @@ export default function CatalogPreviewPage() {
   const catalogId = params.id;
 
   const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const isAcrilex = catalog?.brand === "acrilex";
+  const brandName = isAcrilex ? "ACRILEX" : "Camel Paper";
   const [products, setProducts] = useState<CatalogProductView[]>([]);
   const [catalogGroups, setCatalogGroups] = useState<CatalogGroup[]>([]);
   const [productCategories, setProductCategories] = useState<ProductCategory[]>([]);
@@ -195,7 +200,7 @@ export default function CatalogPreviewPage() {
         supabase
           .from("catalogs")
           .select(
-            "id, name, description, cover_title, cover_subtitle, status, client_name, client_company, client_contact, valid_until, share_token, share_enabled, sent_at, products_per_page"
+            "id, name, brand, description, cover_title, cover_subtitle, status, client_name, client_company, client_contact, valid_until, share_token, share_enabled, sent_at, products_per_page"
           )
           .eq("id", catalogId)
           .single(),
@@ -216,6 +221,7 @@ export default function CatalogPreviewPage() {
               id,
               name,
               category_id,
+              brand,
               sku,
               barcode,
               description,
@@ -266,7 +272,7 @@ export default function CatalogPreviewPage() {
             ? item.products[0]
             : item.products;
 
-          if (!product) return null;
+          if (!product || product.brand !== catalogResult.data?.brand) return null;
 
           return {
             ...product,
@@ -810,6 +816,12 @@ export default function CatalogPreviewPage() {
     return `${cut.slice(0, lastSpace > 90 ? lastSpace : maxLength).trim()}…`;
   }
 
+function formatProductPrice(value: number | null | undefined) {
+  const price = Number(value);
+  if (value == null || !Number.isFinite(price) || price <= 0) return "Preço sob consulta";
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(price);
+}
+
   function formatMoney(value: number | null | undefined) {
     return new Intl.NumberFormat("pt-BR", {
       style: "currency",
@@ -884,7 +896,7 @@ export default function CatalogPreviewPage() {
         : null,
     ].filter(
       (item): item is { key: string; label: string; value: number | null } =>
-        Boolean(item && item.value !== null && item.value !== undefined)
+        Boolean(item)
     );
   }
 
@@ -1096,7 +1108,7 @@ export default function CatalogPreviewPage() {
       {visualCatalogMode && (visualPreparing || visualLoadError) && (
         <div className="visual-loading-overlay no-print">
           <div className="visual-loading-card">
-            <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={150} height={58} priority />
+            {isAcrilex ? <AcrilexLogo width={150} /> : <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={150} height={58} priority />}
             {visualPreparing ? (
               <>
                 <div className="visual-loading-spinner" />
@@ -1441,12 +1453,12 @@ export default function CatalogPreviewPage() {
         return (
           <section className="response-print-sheet">
             <header className="response-print-header">
-              <Image
+              {isAcrilex ? <AcrilexLogo width={190} /> : <Image
                 src="/brand/camel-colorido.svg"
                 alt="Camel Paper"
                 width={190}
                 height={74}
-              />
+              />}
 
               <div>
                 <span>SELEÇÃO DO CLIENTE</span>
@@ -1549,7 +1561,7 @@ export default function CatalogPreviewPage() {
             </div>
 
             <footer className="response-print-footer">
-              <span>Camel Paper • Catálogo comercial personalizado</span>
+              <span>{brandName} • Catálogo comercial personalizado</span>
               <span>
                 Documento gerado em {new Date().toLocaleDateString("pt-BR")}
               </span>
@@ -1567,16 +1579,16 @@ export default function CatalogPreviewPage() {
           <>
             <section className="visual-cover-page print-page">
               <div className="visual-cover-brand">
-                <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={230} height={90} priority />
+                {isAcrilex ? <AcrilexLogo width={230} /> : <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={230} height={90} priority />}
                 <span>CATÁLOGO VISUAL</span>
               </div>
               <div className="visual-cover-copy">
-                <span>LINHA DE PRODUTOS CAMEL PAPER</span>
+                <span>LINHA DE PRODUTOS {brandName.toUpperCase()}</span>
                 <h1>{catalog.cover_title || catalog.name || "Catálogo de Produtos"}</h1>
                 <p>Apresentação visual com fotos profissionais de produtos, detalhes e variações.</p>
                 <div className="visual-cover-count"><strong>{products.length}</strong><span>produtos selecionados</span></div>
               </div>
-              <footer><span>Camel Paper</span><strong>camelpaper.com.br</strong></footer>
+              <footer><span>{brandName}</span><strong>{isAcrilex ? "Catálogo de produtos ACRILEX" : "camelpaper.com.br"}</strong></footer>
             </section>
 
             {visualCatalogProducts.map(({ section, product }, productIndex) => {
@@ -1593,7 +1605,7 @@ export default function CatalogPreviewPage() {
                 return (
                 <section className={`visual-product-page print-page ${hasVariants ? "visual-variants-page" : ""} ${sharedImages.length ? "visual-has-shared" : ""} ${pageImages.every((item) => !item.image) ? "visual-text-options" : ""}`} key={`${product.id}-visual-${imagePageIndex}`}>
                   <header className="visual-product-header">
-                    <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={145} height={56} />
+                    {isAcrilex ? <AcrilexLogo width={145} /> : <Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={145} height={56} />}
                     <div>
                       <span>{section.category.name}</span>
                       <small>{String(productIndex + 1).padStart(2, "0")} / {String(products.length).padStart(2, "0")}</small>
@@ -1760,20 +1772,20 @@ export default function CatalogPreviewPage() {
           </svg>
 
           <div className="cover-topbar">
-            <Image
+            {isAcrilex ? <AcrilexLogo width={240} /> : <Image
               className="cover-logo-screen"
               src="/brand/camel-branco.svg"
               alt="Camel Paper"
               width={240}
               height={94}
               priority
-            />
+            />}
             <span className="cover-edition">CATÁLOGO COMERCIAL 2026</span>
           </div>
 
           <div className="cover-hero">
             <div className="cover-copy">
-              <span className="cover-kicker">LINHA COMPLETA CAMEL PAPER</span>
+              <span className="cover-kicker">LINHA COMPLETA {brandName.toUpperCase()}</span>
               <h1>{catalog.cover_title || "Catálogo de Produtos"}</h1>
               <p>{catalog.cover_subtitle || "Soluções para papelaria, escritório e varejo."}</p>
 
@@ -1814,21 +1826,21 @@ export default function CatalogPreviewPage() {
 
           <div className="cover-footer">
             <div>
-              <span>CAMEL PAPER</span>
+              <span>{brandName.toUpperCase()}</span>
               <small>Papelaria • Escolar • Escritório</small>
             </div>
-            <strong>camelpaper.com.br</strong>
+            <strong>{isAcrilex ? "Catálogo de produtos ACRILEX" : "camelpaper.com.br"}</strong>
           </div>
         </section>
 
         <section className="index-page print-page">
           <div className="page-brand">
-            <Image
+            {isAcrilex ? <AcrilexLogo width={180} /> : <Image
               src="/brand/camel-colorido.svg"
               alt="Camel Paper"
               width={180}
               height={70}
-            />
+            />}
           </div>
 
           <div className="index-content">
@@ -1917,12 +1929,12 @@ export default function CatalogPreviewPage() {
               return (
                 <section className="product-page print-page density-1" key={`${section.group.id}-${pageIndex}`}>
                   <header className="product-page-header">
-                    <Image
+                    {isAcrilex ? <AcrilexLogo width={150} /> : <Image
                       src="/brand/camel-colorido.svg"
                       alt="Camel Paper"
                       width={150}
                       height={60}
-                    />
+                    />}
                     <span>{String(pageNumber).padStart(2, "0")}</span>
                   </header>
 
@@ -1972,7 +1984,7 @@ export default function CatalogPreviewPage() {
 
                     <div className="product-info">
                       <span className="section-eyebrow">
-                        {catalogGroup?.name || "PRODUTO CAMEL PAPER"}
+                        {catalogGroup?.name || `PRODUTO ${brandName.toUpperCase()}`}
                       </span>
                       <h2>{product.name}</h2>
 
@@ -1981,7 +1993,7 @@ export default function CatalogPreviewPage() {
                           {commercialPrices.map((price) => (
                             <div className="catalog-price" key={price.key}>
                               <span>{price.label}</span>
-                              <strong>{formatMoney(price.value)}</strong>
+                              <strong>{formatProductPrice(price.value)}</strong>
                             </div>
                           ))}
                         </div>
@@ -2070,8 +2082,8 @@ export default function CatalogPreviewPage() {
                                     {visibility.barcode && variant.barcode && (
                                       <small>EAN: {variant.barcode}</small>
                                     )}
-                                    {visibility.price && variantPrice !== null && (
-                                      <b>{formatMoney(variantPrice)}</b>
+                                    {visibility.price && (
+                                      <b>{formatProductPrice(variantPrice)}</b>
                                     )}
                                   </div>
                                 </div>
@@ -2108,12 +2120,12 @@ export default function CatalogPreviewPage() {
                 key={`${section.group.id}-${pageIndex}`}
               >
                 <header className="grid-page-header">
-                  <Image
+                  {isAcrilex ? <AcrilexLogo width={138} /> : <Image
                     src="/brand/camel-colorido.svg"
                     alt="Camel Paper"
                     width={138}
                     height={54}
-                  />
+                  />}
                   <div>
                     <strong>{section.group.name}</strong>
                     <span>Página {pageNumber}</span>
@@ -2176,7 +2188,7 @@ export default function CatalogPreviewPage() {
                               {commercialPrices.slice(0, productsPerPage === 2 ? 3 : 2).map((price) => (
                                 <div key={price.key}>
                                   <span>{price.label}</span>
-                                  <strong>{formatMoney(price.value)}</strong>
+                                  <strong>{formatProductPrice(price.value)}</strong>
                                 </div>
                               ))}
                             </div>
@@ -4774,3 +4786,4 @@ export default function CatalogPreviewPage() {
     </main>
   );
 }
+

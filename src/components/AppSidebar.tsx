@@ -1,5 +1,6 @@
 "use client";
 
+import AcrilexLogo from "@/components/AcrilexLogo";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -45,6 +46,7 @@ const menuGroups: Array<{ label: string; items: MenuItem[] }> = [
     items: [
       { href: "/catalogos", label: "Criar catálogo", icon: FilePlus2, exact: true, roles: ["admin", "commercial", "seller"] },
       { href: "/catalogos/gerenciar", label: "Central de catálogos", icon: LibraryBig, roles: ["admin", "commercial"] },
+      { href: "/catalogo#marca=acrilex", label: "ACRILEX", icon: BriefcaseBusiness, roles: ["admin", "commercial", "seller", "viewer"] },
       { href: "/catalogo", label: "Catálogo de vendedor", icon: BriefcaseBusiness, roles: ["admin", "commercial", "seller", "viewer"] },
     ],
   },
@@ -82,6 +84,14 @@ function initials(name: string | null) {
 export default function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const [catalogBrand, setCatalogBrand] = useState("camel-paper");
+  useEffect(() => {
+    const sync = () => setCatalogBrand(new URLSearchParams(window.location.hash.slice(1)).get("marca") === "acrilex" ? "acrilex" : "camel-paper");
+    sync();
+    window.addEventListener("hashchange", sync);
+    window.addEventListener("popstate", sync);
+    return () => { window.removeEventListener("hashchange", sync); window.removeEventListener("popstate", sync); };
+  }, [pathname]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [signingOut, setSigningOut] = useState(false);
 
@@ -120,6 +130,8 @@ export default function AppSidebar() {
   }, [currentRole]);
 
   function isActive(href: string, exact = false) {
+    if (href === "/catalogo#marca=acrilex") return pathname.startsWith("/catalogo") && !pathname.startsWith("/catalogos") && catalogBrand === "acrilex";
+    if (href === "/catalogo" && catalogBrand === "acrilex") return false;
     if (exact) return pathname === href;
     return pathname === href || pathname.startsWith(`${href}/`);
   }
@@ -155,10 +167,11 @@ export default function AppSidebar() {
             <div className="sidebar-group-items">
               {group.items.map((item) => {
                 const Icon = item.icon;
+                const NavLink = item.href === "/catalogo" || item.href.includes("marca=acrilex") ? "a" : Link;
                 const active = isActive(item.href, item.exact);
 
                 return (
-                  <Link
+                  <NavLink
                     key={item.href}
                     href={item.href}
                     className={`sidebar-link${active ? " is-active" : ""}`}
@@ -168,8 +181,8 @@ export default function AppSidebar() {
                     <span className="sidebar-icon">
                       <Icon size={17} strokeWidth={1.9} />
                     </span>
-                    <span>{item.label}</span>
-                  </Link>
+                    <span className={item.href.includes("marca=acrilex") ? "sidebar-brand-label" : undefined}>{item.href.includes("marca=acrilex") ? <AcrilexLogo width={130} /> : item.label}</span>
+                  </NavLink>
                 );
               })}
             </div>
@@ -209,6 +222,8 @@ export default function AppSidebar() {
         .sidebar-nav{display:flex;flex-direction:column;gap:18px}
         .sidebar-group{display:flex;flex-direction:column;gap:7px}
         .sidebar-group-label{padding:0 11px;color:#b0a19a;font-size:8px;font-weight:900;letter-spacing:1.7px}
+        .sidebar-brand-label{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0;padding:4px 0}
+        .sidebar-brand-label small{display:block;white-space:nowrap;font-size:10px;line-height:1.3}
         .sidebar-group-items{display:flex;flex-direction:column;gap:5px}
         :global(.sidebar-link){
           position:relative;min-height:45px;border:1px solid transparent;border-radius:12px;
@@ -252,3 +267,4 @@ export default function AppSidebar() {
     </aside>
   );
 }
+

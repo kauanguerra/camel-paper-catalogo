@@ -1,5 +1,7 @@
 "use client";
 
+import Image from "next/image";
+import AcrilexLogo from "@/components/AcrilexLogo";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -12,6 +14,7 @@ type Category = {
 };
 
 type Product = {
+  brand: string;
   id: string;
   name: string;
   sku: string | null;
@@ -69,6 +72,8 @@ type Profile = {
 
 export default function CatalogosAdminPage() {
   const router = useRouter();
+  const [brand, setBrand] = useState("camel-paper");
+  const brandName = brand === "acrilex" ? "ACRILEX" : "Camel Paper";
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -148,7 +153,7 @@ export default function CatalogosAdminPage() {
 
         supabase
           .from("products")
-          .select("id, name, sku, internal_code, category_id, catalog_group_id, active, sale_price, unit_price, package_price, master_package_quantity, master_price")
+          .select("id, name, sku, internal_code, category_id, brand, catalog_group_id, active, sale_price, unit_price, package_price, master_package_quantity, master_price")
           .eq("active", true)
           .order("name"),
 
@@ -202,10 +207,30 @@ export default function CatalogosAdminPage() {
     loadData();
   }, []);
 
+  const brandProducts = useMemo(() => products.filter((p) => p.brand === brand), [products, brand]);
+  const brandCategories = useMemo(() => {
+    const ids = new Set(brandProducts.map((p) => p.category_id));
+    return categories.filter((c) => ids.has(c.id));
+  }, [brandProducts, categories]);
+
+  function changeBrand(next: string) {
+    if (next === brand || creating) return;
+    if (selectedProducts.length && !window.confirm("Trocar a marca limpa a seleção de produtos e os preços personalizados deste novo catálogo. Continuar?")) return;
+    const nextName = next === "acrilex" ? "ACRILEX" : "Camel Paper";
+    clearSelection();
+    setSelectedCategory("all");
+    setQuery("");
+    setFeedback("");
+    setBrand(next);
+    if (name === `Catálogo Geral ${brandName}`) setName(`Catálogo Geral ${nextName}`);
+    if (description === `Seleção comercial de produtos ${brandName}.`) setDescription(`Seleção comercial de produtos ${nextName}.`);
+    if (coverSubtitle === brandName) setCoverSubtitle(nextName);
+  }
+
   const filteredProducts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
-    return products.filter((product) => {
+    return brandProducts.filter((product) => {
       const categoryMatch =
         selectedCategory === "all" || product.category_id === selectedCategory;
 
@@ -217,7 +242,7 @@ export default function CatalogosAdminPage() {
 
       return categoryMatch && queryMatch;
     });
-  }, [products, selectedCategory, query]);
+  }, [brandProducts, selectedCategory, query]);
 
   function getImage(productId: string) {
     return (
@@ -246,7 +271,7 @@ export default function CatalogosAdminPage() {
   }
 
   function formatPrice(value: number | null) {
-    if (value == null) return "Preço não informado";
+    if (value == null || !Number.isFinite(Number(value)) || Number(value) <= 0) return "Preço sob consulta";
     return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(value));
   }
 
@@ -333,7 +358,7 @@ export default function CatalogosAdminPage() {
   }
 
   function selectAll() {
-    setSelectedProducts(products.map((product) => product.id));
+    setSelectedProducts(brandProducts.map((product) => product.id));
   }
 
   function selectFiltered() {
@@ -398,6 +423,11 @@ export default function CatalogosAdminPage() {
       return;
     }
 
+    if (selectedProducts.some((id) => !brandProducts.some((p) => p.id === id))) {
+      setFeedback("A seleção contém produtos de outra marca. Selecione novamente.");
+      return;
+    }
+
     if (shareAfterCreate && !validUntil) {
       setFeedback("Informe a validade para enviar o catálogo ao cliente.");
       return;
@@ -411,9 +441,10 @@ export default function CatalogosAdminPage() {
         .from("catalogs")
         .insert({
           name: name.trim(),
+          brand,
           description: description.trim() || null,
           cover_title: coverTitle.trim() || "Catálogo de Produtos",
-          cover_subtitle: coverSubtitle.trim() || "Camel Paper",
+          cover_subtitle: coverSubtitle.trim() || brandName,
           client_name: clientName.trim() || null,
           client_company: clientCompany.trim() || null,
           client_contact: clientContact.trim() || null,
@@ -529,6 +560,14 @@ export default function CatalogosAdminPage() {
                   <h2>Informações do catálogo</h2>
                 </div>
               </div>
+
+              <div className="catalog-brand-options" aria-label="Marca do catálogo">
+                <button type="button" disabled={creating} aria-pressed={brand === "camel-paper"} onClick={() => changeBrand("camel-paper")}>
+                  <span style={{ position: "relative", display: "block", width: 140, height: 52, overflow: "hidden" }}><Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={180} height={180} unoptimized style={{ position: "absolute", width: 180, height: 180, maxWidth: "none", left: "50%", top: "50%", transform: "translate(-52%, -48%)" }} /></span>
+                </button>
+                <button type="button" disabled={creating} aria-pressed={brand === "acrilex"} onClick={() => changeBrand("acrilex")}><AcrilexLogo width={140} /></button>
+              </div>
+              <p>Marca selecionada: <strong>{brandName}</strong> · {brandProducts.length} produtos disponíveis.</p>
 
               <div className="field-grid">
                 <label>
@@ -740,7 +779,7 @@ export default function CatalogosAdminPage() {
                   Todos
                 </button>
 
-                {categories.map((category) => (
+                {brandCategories.map((category) => (
                   <button
                     type="button"
                     key={category.id}
@@ -756,6 +795,8 @@ export default function CatalogosAdminPage() {
 
               {loading ? (
                 <div className="state-box">Carregando produtos...</div>
+              ) : filteredProducts.length === 0 ? (
+                <div className="state-box">Nenhum produto {brandName} encontrado para esta seleção.</div>
               ) : (
                 <div className="products-grid">
                   {filteredProducts.map((product) => {
@@ -897,9 +938,9 @@ export default function CatalogosAdminPage() {
 
           <aside className="right-column">
             <section className="summary-card">
-              <span className="summary-eyebrow">RESUMO</span>
+              <span className="summary-eyebrow">RESUMO · {brandName}</span>
               <h2>{coverTitle || "Catálogo de Produtos"}</h2>
-              <p>{coverSubtitle || "Camel Paper"}</p>
+              <p>{coverSubtitle || brandName}</p>
 
               {(clientName || clientCompany || validUntil) && (
                 <div className="client-summary">
@@ -922,7 +963,7 @@ export default function CatalogosAdminPage() {
                   <span>Produtos selecionados</span>
                 </div>
                 <div>
-                  <strong>{categories.length}</strong>
+                  <strong>{brandCategories.length}</strong>
                   <span>Categorias disponíveis</span>
                 </div>
               </div>
@@ -1001,6 +1042,11 @@ export default function CatalogosAdminPage() {
       </section>
 
       <style jsx>{`
+        .catalog-brand-options {display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+        .catalog-brand-options button {min-width:180px;min-height:72px;background:#fff;border:1px solid #e2d5cd;border-radius:14px;padding:8px 16px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+        .catalog-brand-options button[aria-pressed="true"] {border:2px solid #96301a;background:#fff6ef}
+        .catalog-brand-options button:disabled {opacity:.6;cursor:wait}
+
         .page-shell {
           min-height: 100vh;
           display: grid;
@@ -2281,3 +2327,4 @@ export default function CatalogosAdminPage() {
     </main>
   );
 }
+

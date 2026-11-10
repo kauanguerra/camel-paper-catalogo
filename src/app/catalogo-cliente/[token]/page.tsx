@@ -272,6 +272,12 @@ export default function CatalogoClientePage() {
     return new Date(`${value}T12:00:00`).toLocaleDateString("pt-BR");
   }
 
+function formatProductPrice(value: number | null | undefined) {
+  const price = Number(value);
+  if (value == null || !Number.isFinite(price) || price <= 0) return "Preço sob consulta";
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(price);
+}
+
   function formatPrice(value: number) {
     return new Intl.NumberFormat("pt-BR", {
       style: "currency",
@@ -433,6 +439,10 @@ export default function CatalogoClientePage() {
 
     return entries;
   }, [items, selected, selectedVariantOptions, quantities, variants]);
+
+  const hasPriceOnRequest = selectedEntries.some(
+    (entry) => !Number.isFinite(entry.unitPrice) || entry.unitPrice <= 0
+  );
 
   const total = useMemo(
     () =>
@@ -830,7 +840,7 @@ export default function CatalogoClientePage() {
           </p>
           <div className="success-total">
             <small>Total da seleção</small>
-            <strong>{formatPrice(total)}</strong>
+            <strong>{hasPriceOnRequest ? "Total sob consulta" : formatPrice(total)}</strong>
           </div>
         </div>
 
@@ -1069,7 +1079,7 @@ export default function CatalogoClientePage() {
                     </div>
 
                     {(visibility.price ?? true) && (
-                      <strong className="price">{formatPrice(displayedPrice)}</strong>
+                      <strong className="price">{formatProductPrice(displayedPrice)}</strong>
                     )}
                   </div>
 
@@ -1153,7 +1163,7 @@ export default function CatalogoClientePage() {
                                   <strong>{variant.name}</strong>
                                   {variant.color && <small>{variant.color}</small>}
                                   {variant.sku && <small>SKU {variant.sku}</small>}
-                                  <b>{formatPrice(variantPrice)}</b>
+                                  <b>{formatProductPrice(variantPrice)}</b>
                                 </div>
 
                                 <i>{variantChecked ? "✓" : active ? "•" : ""}</i>
@@ -1218,7 +1228,7 @@ export default function CatalogoClientePage() {
                                         </button>
                                       </div>
                                       <small>
-                                        {formatPrice(variantPrice * variantQuantity)}
+                                        {formatProductPrice(variantPrice * variantQuantity)}
                                       </small>
                                     </div>
                                   )}
@@ -1237,7 +1247,7 @@ export default function CatalogoClientePage() {
                         <span>Quantidade desejada</span>
                         <small>
                           Subtotal{" "}
-                          {formatPrice(
+                          {formatProductPrice(
                             item.price *
                               (quantities[item.catalog_product_id] || 1)
                           )}
@@ -1348,7 +1358,7 @@ export default function CatalogoClientePage() {
           <div className="send-footer">
             <div className="total-box">
               <span>Total estimado</span>
-              <strong>{formatPrice(total)}</strong>
+              <strong>{hasPriceOnRequest ? "Total sob consulta" : formatPrice(total)}</strong>
               <small>
                 Calculado com os preços deste catálogo e as quantidades selecionadas.
               </small>
@@ -1439,7 +1449,7 @@ export default function CatalogoClientePage() {
               <div className="gallery-info">
                 <span>PRODUTO CAMEL PAPER</span>
                 <h2>{currentItem.product.name}</h2>
-                <strong>{formatPrice(currentItem.price)}</strong>
+                <strong>{formatProductPrice(currentItem.price)}</strong>
 
                 {currentItem.product.description && (
                   <p>{currentItem.product.description}</p>
@@ -2559,3 +2569,4 @@ export default function CatalogoClientePage() {
     </main>
   );
 }
+

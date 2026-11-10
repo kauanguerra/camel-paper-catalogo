@@ -11,6 +11,7 @@ import {
   resolveCatalogVariantImage,
 } from "@/lib/catalog-image-policy";
 import { hasOfflineImages, prepareOfflineImages } from "@/lib/catalog-offline";
+import AcrilexLogo from "@/components/AcrilexLogo";
 import AppSidebar from "@/components/AppSidebar";
 import SellerProductDetails from "@/components/SellerProductDetails";
 import SellerCheckout from "@/components/SellerCheckout";
@@ -31,6 +32,7 @@ type Product = {
   internal_code: string | null;
   barcode: string | null;
   category_id: string | null;
+  brand?: string | null;
   catalog_group_id?: string | null;
   description: string | null;
   specifications: string | null;
@@ -73,6 +75,12 @@ type ProductVariant = {
   sale_price: number | null;
   active: boolean;
 };
+
+function formatProductPrice(value: number | null | undefined) {
+  const price = Number(value);
+  if (value == null || !Number.isFinite(price) || price <= 0) return "Preço sob consulta";
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(price);
+}
 
 function money(value: number) {
   return new Intl.NumberFormat("pt-BR", {
@@ -154,12 +162,17 @@ function formatOfflineDate(value: string | null) {
 }
 
 export default function CatalogoPage() {
+  const [selectedBrand, setSelectedBrand] = useState("camel-paper");
   const [detailId, setDetailId] = useState<string | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
 
   useEffect(() => {
     const restore = () => {
       const view = readSellerView(window.location.href);
+      setSelectedBrand(view.brand);
+      setSelectedCategory("all");
+      setSearch("");
+      setCartOpen(false);
       setDetailId(view.productId);
       setCheckoutOpen(view.checkout);
     };
@@ -173,7 +186,7 @@ export default function CatalogoPage() {
   }, []);
 
   function navigateSeller(productId: string | null, checkout = false) {
-    window.history.pushState(null, "", sellerViewUrl(productId, checkout));
+    window.history.pushState(null, "", sellerViewUrl(productId, checkout, selectedBrand));
     setDetailId(productId);
     setCheckoutOpen(checkout);
     setCartOpen(false);
@@ -307,7 +320,7 @@ export default function CatalogoPage() {
           supabase
             .from("products")
             .select(
-              "id, name, sku, internal_code, barcode, category_id, catalog_group_id, description, specifications, width_cm, height_cm, depth_cm, weight_g, material, package_quantity, package_unit, main_image_url, sale_price, has_variants, commercial_visibility, commercial_variants, commercial_highlights, active"
+              "id, name, sku, internal_code, barcode, category_id, brand, catalog_group_id, description, specifications, width_cm, height_cm, depth_cm, weight_g, material, package_quantity, package_unit, main_image_url, sale_price, has_variants, commercial_visibility, commercial_variants, commercial_highlights, active"
             )
             .eq("active", true)
             .order("name"),
@@ -386,10 +399,30 @@ export default function CatalogoPage() {
     };
   }, []);
 
+  const brandProducts = useMemo(
+    () => products.filter((product) => (product.brand || "camel-paper") === selectedBrand),
+    [products, selectedBrand]
+  );
+  const brandCategories = useMemo(() => {
+    const ids = new Set(brandProducts.map((product) => product.category_id));
+    return categories.filter((category) => ids.has(category.id));
+  }, [brandProducts, categories]);
+
+  function selectBrand(brand: string) {
+    window.history.pushState(null, "", sellerViewUrl(null, false, brand));
+    setSelectedBrand(brand);
+    setSelectedCategory("all");
+    setSearch("");
+    setDetailId(null);
+    setCheckoutOpen(false);
+    setCartOpen(false);
+    window.dispatchEvent(new Event("hashchange"));
+  }
+
   const filteredProducts = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
 
-    return organizeCatalog(products, categories, catalogGroups).filter((product) => {
+    return organizeCatalog(brandProducts, categories, catalogGroups).filter((product) => {
       const matchesCategory =
         selectedCategory === "all" ||
         product.category_id === selectedCategory;
@@ -403,7 +436,7 @@ export default function CatalogoPage() {
 
       return matchesCategory && matchesSearch;
     });
-  }, [products, categories, catalogGroups, search, selectedCategory]);
+  }, [brandProducts, categories, catalogGroups, search, selectedCategory]);
 
   function getProfessionalImage(productId: string) {
     return resolveCatalogPresentationImage(catalogImages, productId);
@@ -451,7 +484,7 @@ export default function CatalogoPage() {
       variant?.sale_price ?? product.sale_price ?? 0
     );
 
-    if (unitPrice <= 0) {
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
       setCartMessage(`Preço não disponível para ${product.name}.`);
       window.setTimeout(() => setCartMessage(null), 2600);
       return;
@@ -501,7 +534,7 @@ export default function CatalogoPage() {
       const activeIds = new Set(products.map((product) => product.id));
       const imagesToSave = catalogImages.filter((image) => activeIds.has(image.product_id));
       const result = await prepareOfflineImages(
-        imagesToSave.map((image) => image.image_url),
+        [...imagesToSave.map((image) => image.image_url), new URL("/brand/acrilex-logo.png", window.location.origin).href],
         (saved, total, failed) => {
           setOfflineProgress(total === 0 ? 0 : Math.min(99, Math.round(saved / total * 100)));
           setOfflineMessage(`${saved} de ${total} fotos salvas e verificadas${failed ? ` • ${failed} falha(s)` : ""}. Mantenha esta página aberta.`);
@@ -555,7 +588,7 @@ export default function CatalogoPage() {
           <div className="brand-row">
             <div className="brand">
               <div className="brand-logo">
-                <Image
+                {selectedBrand === "acrilex" ? <AcrilexLogo width={230} /> : <Image
                   unoptimized
                   src="/brand/camel-paper-logo.png"
                   alt="Camel Paper"
@@ -563,7 +596,7 @@ export default function CatalogoPage() {
                   height={110}
                   priority
                   className="camel-logo-image"
-                />
+                />}
               </div>
               <span>Loja do Vendedor</span>
             </div>
@@ -577,7 +610,7 @@ export default function CatalogoPage() {
 
           <div className="hero-content">
             <span className="eyebrow">VENDA ASSISTIDA</span>
-            <h1>Monte o pedido junto com o cliente.</h1>
+            <h1>{selectedBrand === "acrilex" ? "Catálogo ACRILEX" : "Monte o pedido junto com o cliente."}</h1>
             <p>
               Consulte fotos, escolha variações, informe quantidades e monte
               o pedido do cliente mesmo em visitas com conexão instável.
@@ -641,6 +674,10 @@ export default function CatalogoPage() {
       </section>
 
       <section className="content">
+        <div className="brand-selector" aria-label="Marca do catálogo">
+          <button type="button" aria-pressed={selectedBrand === "camel-paper"} onClick={() => selectBrand("camel-paper")}><span style={{ display: "block", position: "relative", width: 140, height: 52, overflow: "hidden" }}><Image src="/brand/camel-colorido.svg" alt="Camel Paper" width={180} height={180} unoptimized style={{ position: "absolute", width: 180, height: 180, maxWidth: "none", left: "50%", top: "50%", transform: "translate(-52%, -48%)" }} /></span></button>
+          <button type="button" aria-pressed={selectedBrand === "acrilex"} onClick={() => selectBrand("acrilex")}><AcrilexLogo width={120} /></button>
+        </div>
         <div className="category-bar">
           <button
             type="button"
@@ -650,7 +687,7 @@ export default function CatalogoPage() {
             Todos
           </button>
 
-          {[...categories].sort((a,b) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base", numeric: true })).map((category) => (
+          {[...brandCategories].sort((a,b) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base", numeric: true })).map((category) => (
             <button
               type="button"
               key={category.id}
@@ -684,7 +721,7 @@ export default function CatalogoPage() {
           <div className="state-card">Carregando catálogo...</div>
         ) : filteredProducts.length === 0 ? (
           <div className="state-card">
-            Nenhum produto encontrado para este filtro.
+            {brandProducts.length === 0 && selectedBrand === "acrilex" ? "Nenhum produto ACRILEX disponível neste catálogo ainda." : "Nenhum produto encontrado para este filtro."}
           </div>
         ) : (
           <div className="product-grid">
@@ -741,19 +778,17 @@ export default function CatalogoPage() {
 
                     <h3>{product.name}</h3>
 
-                    {(product.commercial_visibility?.price ?? true) &&
-                      product.sale_price !== null && (
-                        <strong className="product-price">
-                          {new Intl.NumberFormat("pt-BR", {
-                            style: "currency",
-                            currency: "BRL",
-                          }).format(Number(product.sale_price))}
-                        </strong>
-                      )}
+                    {(product.commercial_visibility?.price ?? true) && (
+                      <strong className="product-price">
+                        {formatProductPrice(
+                          variantsForProduct(product.id).find((variant) => variant.id === selectedVariants[product.id])?.sale_price ?? product.sale_price
+                        )}
+                      </strong>
+                    )}
 
                     <p>
                       {product.description ||
-                        "Produto disponível no catálogo comercial Camel Paper."}
+                        `Produto disponível no catálogo comercial ${selectedBrand === "acrilex" ? "ACRILEX" : "Camel Paper"}.`}
                     </p>
 
                     {variantsForProduct(product.id).length > 0 && (
@@ -775,8 +810,8 @@ export default function CatalogoPage() {
                           {variantsForProduct(product.id).map((variant) => (
                             <option value={variant.id} key={variant.id}>
                               {variant.name}
-                              {variant.sale_price !== null
-                                ? ` • ${money(Number(variant.sale_price))}`
+                              {(product.commercial_visibility?.price ?? true)
+                                ? ` • ${formatProductPrice(variant.sale_price ?? product.sale_price)}`
                                 : ""}
                             </option>
                           ))}
@@ -865,6 +900,9 @@ export default function CatalogoPage() {
       />
 
       <style jsx>{`
+        .brand-selector { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:24px; }
+        .brand-selector button { min-width:160px; min-height:58px; padding:8px 20px; border:1px solid #dccfc7; border-radius:14px; background:#fff; color:#642413; font-size:16px; font-weight:800; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+        .brand-selector button[aria-pressed="true"] { border:2px solid #9a311b; background:#fff6ef; }
         .shell {
           min-height: 100vh;
           display: grid;

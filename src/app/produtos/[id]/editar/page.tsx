@@ -190,6 +190,7 @@ export default function EditarProdutoPage() {
   const [form, setForm] = useState({
     name: "",
     category_id: "",
+    brand: "camel-paper",
     internal_code: "",
     sku: "",
     barcode: "",
@@ -241,6 +242,7 @@ export default function EditarProdutoPage() {
             id,
             name,
             category_id,
+            brand,
             internal_code,
             sku,
             barcode,
@@ -307,6 +309,7 @@ export default function EditarProdutoPage() {
       setForm({
         name: product.name || "",
         category_id: product.category_id || "",
+        brand: product.brand || "camel-paper",
         internal_code: product.internal_code || "",
         sku: product.sku || "",
         barcode: product.barcode || "",
@@ -1418,6 +1421,11 @@ export default function EditarProdutoPage() {
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
+    if (!["camel-paper", "acrilex"].includes(form.brand)) {
+      alert("Selecione uma marca válida.");
+      return;
+    }
+
     if (!form.name.trim()) {
       alert("Informe o nome do produto.");
       return;
@@ -1439,6 +1447,7 @@ export default function EditarProdutoPage() {
           name: form.name.trim(),
           slug: slugBase,
           category_id: form.category_id || null,
+          brand: form.brand,
           internal_code: form.internal_code.trim() || null,
           sku: form.sku.trim() || null,
           barcode: form.barcode.trim() || null,
@@ -1766,6 +1775,18 @@ export default function EditarProdutoPage() {
                   onChange={handleChange}
                   placeholder="Ex.: Caderno Disco 80 Folhas"
                 />
+              </Field>
+
+              <Field label="Marca *">
+                <select
+                  name="brand"
+                  value={form.brand}
+                  onChange={handleChange}
+                  required
+                >
+                  <option value="camel-paper">Camel Paper</option>
+                  <option value="acrilex">ACRILEX</option>
+                </select>
               </Field>
 
               <Field label="Categoria">

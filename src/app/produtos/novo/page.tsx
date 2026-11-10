@@ -101,6 +101,7 @@ export default function NovoProdutoPage() {
   const [form, setForm] = useState({
     name: "",
     category_id: "",
+    brand: "camel-paper",
     internal_code: "",
     sku: "",
     barcode: "",
@@ -434,6 +435,11 @@ export default function NovoProdutoPage() {
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
+    if (!["camel-paper", "acrilex"].includes(form.brand)) {
+      alert("Selecione uma marca válida.");
+      return;
+    }
+
     if (!form.name.trim()) {
       alert("Informe o nome do produto.");
       return;
@@ -457,6 +463,7 @@ export default function NovoProdutoPage() {
           name: form.name.trim(),
           slug,
           category_id: form.category_id || null,
+          brand: form.brand,
           internal_code: form.internal_code.trim() || null,
           sku: form.sku.trim() || null,
           barcode: form.barcode.trim() || null,
@@ -602,6 +609,18 @@ export default function NovoProdutoPage() {
                   placeholder="Ex.: Caderno Disco 80 Folhas"
                   autoFocus
                 />
+              </Field>
+
+              <Field label="Marca *">
+                <select
+                  name="brand"
+                  value={form.brand}
+                  onChange={handleChange}
+                  required
+                >
+                  <option value="camel-paper">Camel Paper</option>
+                  <option value="acrilex">ACRILEX</option>
+                </select>
               </Field>
 
               <Field label="Categoria">

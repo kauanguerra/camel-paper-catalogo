@@ -467,6 +467,12 @@ export default function SellerProductDetails({ productId, onBack, onCheckout }: 
     );
   }, [product, visibility]);
 
+function formatProductPrice(value: number | null | undefined) {
+  const price = Number(value);
+  if (value == null || !Number.isFinite(price) || price <= 0) return "Preço sob consulta";
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(price);
+}
+
   function formatCurrency(value: number) {
     return new Intl.NumberFormat("pt-BR", {
       style: "currency",
@@ -487,7 +493,7 @@ export default function SellerProductDetails({ productId, onBack, onCheckout }: 
       selectedVariant?.sale_price ?? product.sale_price ?? 0
     );
 
-    if (unitPrice <= 0) {
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
       setCartFeedback("Preço não disponível para esta opção.");
       window.setTimeout(() => setCartFeedback(""), 2200);
       return;
@@ -772,26 +778,13 @@ export default function SellerProductDetails({ productId, onBack, onCheckout }: 
             </div>
           )}
 
-          {visibility.price &&
-            (selectedVariant?.sale_price !== null && selectedVariant?.sale_price !== undefined
-              ? true
-              : product.sale_price !== null) && (
+          {visibility.price && (
             <div className="price-card">
               <span>PREÇO DE VENDA</span>
-              <strong>
-                {formatCurrency(
-                  Number(
-                    selectedVariant?.sale_price !== null &&
-                      selectedVariant?.sale_price !== undefined
-                      ? selectedVariant.sale_price
-                      : product.sale_price
-                  )
-                )}
-              </strong>
-              {selectedVariant?.sale_price !== null &&
-                selectedVariant?.sale_price !== undefined && (
-                  <small>Preço da variação {selectedVariant.name}</small>
-                )}
+              <strong>{formatProductPrice(selectedVariant?.sale_price ?? product.sale_price)}</strong>
+              {selectedVariant?.sale_price != null && (
+                <small>Preço da variação {selectedVariant.name}</small>
+              )}
             </div>
           )}
 
@@ -2154,5 +2147,6 @@ export default function SellerProductDetails({ productId, onBack, onCheckout }: 
     </main>
   );
 }
+
 
 
