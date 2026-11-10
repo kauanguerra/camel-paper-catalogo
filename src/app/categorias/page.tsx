@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import AppSidebar from "@/components/AppSidebar";
+import CatalogClassificationPanel from "@/components/CatalogClassificationPanel";
 
 type Category = {
   id: string;
@@ -158,6 +159,8 @@ export default function CategoriasPage() {
           <div><b>{activeCount}</b><span>Categorias ativas</span></div>
           <div><b>{products.length}</b><span>Produtos vinculados</span></div>
         </div>
+
+        <CatalogClassificationPanel onApplied={() => { void loadData(); }} />
 
         <section className="create-card">
           <div><p className="eyebrow">NOVA CATEGORIA</p><h2>Adicionar categoria</h2></div>

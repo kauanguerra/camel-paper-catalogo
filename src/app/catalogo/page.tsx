@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   getOptimizedCatalogImageUrl,
@@ -14,6 +14,7 @@ import { hasOfflineImages, prepareOfflineImages } from "@/lib/catalog-offline";
 import AppSidebar from "@/components/AppSidebar";
 import SellerProductDetails from "@/components/SellerProductDetails";
 import SellerCheckout from "@/components/SellerCheckout";
+import { organizeCatalog, type ClassificationGroup } from "@/lib/catalog-organization";
 import { readSellerView, sellerViewUrl } from "@/lib/seller-navigation";
 import SellerCart from "@/components/SellerCart";
 import { useSellerCart } from "@/hooks/useSellerCart";
@@ -30,6 +31,7 @@ type Product = {
   internal_code: string | null;
   barcode: string | null;
   category_id: string | null;
+  catalog_group_id?: string | null;
   description: string | null;
   specifications: string | null;
   width_cm: number | null;
@@ -88,6 +90,7 @@ type OfflineCatalogRecord = {
   key: string;
   products: Product[];
   categories: Category[];
+  catalogGroups?: ClassificationGroup[];
   catalogImages: ProductImage[];
   productVariants: ProductVariant[];
   updatedAt: string;
@@ -179,6 +182,7 @@ export default function CatalogoPage() {
 
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [catalogGroups, setCatalogGroups] = useState<ClassificationGroup[]>([]);
   const [catalogImages, setCatalogImages] = useState<ProductImage[]>([]);
   const [productVariants, setProductVariants] = useState<ProductVariant[]>([]);
   const [search, setSearch] = useState("");
@@ -234,6 +238,7 @@ export default function CatalogoPage() {
 
         setProducts(offline.products);
         setCategories(offline.categories);
+        setCatalogGroups(offline.catalogGroups || []);
         setCatalogImages(offline.catalogImages);
         setProductVariants(offline.productVariants || []);
         const verified = offline.offlineVersion === 2 && await hasOfflineImages(offline.imageManifest);
@@ -297,12 +302,12 @@ export default function CatalogoPage() {
         return;
       }
 
-      const [productsResult, categoriesResult, imagesResult, variantsResult] =
+      const [productsResult, categoriesResult, imagesResult, variantsResult, groupsResult] =
         await Promise.all([
           supabase
             .from("products")
             .select(
-              "id, name, sku, internal_code, barcode, category_id, description, specifications, width_cm, height_cm, depth_cm, weight_g, material, package_quantity, package_unit, main_image_url, sale_price, has_variants, commercial_visibility, commercial_variants, commercial_highlights, active"
+              "id, name, sku, internal_code, barcode, category_id, catalog_group_id, description, specifications, width_cm, height_cm, depth_cm, weight_g, material, package_quantity, package_unit, main_image_url, sale_price, has_variants, commercial_visibility, commercial_variants, commercial_highlights, active"
             )
             .eq("active", true)
             .order("name"),
@@ -322,6 +327,7 @@ export default function CatalogoPage() {
             )
             .eq("active", true)
             .order("name"),
+          supabase.from("catalog_groups").select("id,name").eq("active",true).order("name"),
         ]);
 
       if (!mounted) return;
@@ -330,7 +336,7 @@ export default function CatalogoPage() {
         Boolean(productsResult.error) ||
         Boolean(categoriesResult.error) ||
         Boolean(imagesResult.error) ||
-        Boolean(variantsResult.error);
+        Boolean(variantsResult.error) || Boolean(groupsResult.error);
 
       if (hasRemoteError) {
         console.error(
@@ -347,6 +353,7 @@ export default function CatalogoPage() {
 
       setProducts((productsResult.data || []) as Product[]);
       setCategories((categoriesResult.data || []) as Category[]);
+      setCatalogGroups((groupsResult.data || []) as ClassificationGroup[]);
       setCatalogImages(
         ((imagesResult.data || []) as ProductImage[]).filter(isCatalogReadyImage)
       );
@@ -382,7 +389,7 @@ export default function CatalogoPage() {
   const filteredProducts = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
 
-    return products.filter((product) => {
+    return organizeCatalog(products, categories, catalogGroups).filter((product) => {
       const matchesCategory =
         selectedCategory === "all" ||
         product.category_id === selectedCategory;
@@ -391,11 +398,12 @@ export default function CatalogoPage() {
         !normalizedSearch ||
         product.name.toLowerCase().includes(normalizedSearch) ||
         (product.sku || "").toLowerCase().includes(normalizedSearch) ||
-        (product.internal_code || "").toLowerCase().includes(normalizedSearch);
+        (product.internal_code || "").toLowerCase().includes(normalizedSearch) ||
+        (product.barcode || "").toLowerCase().includes(normalizedSearch);
 
       return matchesCategory && matchesSearch;
     });
-  }, [products, search, selectedCategory]);
+  }, [products, categories, catalogGroups, search, selectedCategory]);
 
   function getProfessionalImage(productId: string) {
     return resolveCatalogPresentationImage(catalogImages, productId);
@@ -506,6 +514,7 @@ export default function CatalogoPage() {
         key: OFFLINE_RECORD_KEY,
         products,
         categories,
+        catalogGroups,
         catalogImages: imagesToSave,
         productVariants,
         updatedAt,
@@ -641,7 +650,7 @@ export default function CatalogoPage() {
             Todos
           </button>
 
-          {categories.map((category) => (
+          {[...categories].sort((a,b) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base", numeric: true })).map((category) => (
             <button
               type="button"
               key={category.id}
@@ -679,10 +688,14 @@ export default function CatalogoPage() {
           </div>
         ) : (
           <div className="product-grid">
-            {filteredProducts.map((product) => {
+            {filteredProducts.map((product, index) => {
               const professionalImage = getProfessionalImage(product.id);
 
               return (
+                <Fragment key={product.id}>
+                {(index === 0 || filteredProducts[index - 1].category_id !== product.category_id) && (
+                  <h3 className="catalog-category-heading">{categories.find(c => c.id === product.category_id)?.name || "Sem categoria"}</h3>
+                )}
                 <article
                   className="product-card"
                   key={product.id}
@@ -830,6 +843,7 @@ export default function CatalogoPage() {
                     </button>
                   </div>
                 </article>
+                </Fragment>
               );
             })}
           </div>
@@ -1227,6 +1241,8 @@ export default function CatalogoPage() {
           grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 18px;
         }
+
+        .catalog-category-heading { grid-column: 1 / -1; margin: 24px 0 2px; padding-bottom: 12px; border-bottom: 2px solid #dfc6b5; color: #832713; font-size: 23px; }
 
         .product-card {
           overflow: hidden;
